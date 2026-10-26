@@ -1,0 +1,64 @@
+syntax = "proto3";
+package chain.validatorregistry.v1;
+
+import "amino/amino.proto";
+import "chain/validatorregistry/v1/params.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/validatorregistry/types";
+
+// Msg defines the Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // UpdateParams defines a (governance) operation for updating the module
+  // parameters. The authority defaults to the x/gov module account.
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+
+  // RegisterValidator onboards a validator into the SAiCoN registry, creating
+  // ValidatorMetadata in STATUS_BONDING with the lock-up timer started.
+  rpc RegisterValidator(MsgRegisterValidator) returns (MsgRegisterValidatorResponse);
+}
+
+// MsgRegisterValidator onboards the signer as a validator (STATUS_BONDING).
+// The validator operator identity is derived from the creator account bytes.
+message MsgRegisterValidator {
+  option (cosmos.msg.v1.signer) = "creator";
+  option (amino.name) = "chain/x/validatorregistry/MsgRegisterValidator";
+
+  // creator is the account onboarding as a validator (signer).
+  string creator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // lockup_duration_seconds is the requested lock-up period. If <= 0, the
+  // module default (60 days) is applied.
+  int64 lockup_duration_seconds = 2;
+}
+
+// MsgRegisterValidatorResponse returns the resulting validator address.
+message MsgRegisterValidatorResponse {
+  // validator_address is the bech32 operator address recorded in the registry.
+  string validator_address = 1;
+}
+
+// MsgUpdateParams is the Msg/UpdateParams request type.
+message MsgUpdateParams {
+  option (cosmos.msg.v1.signer) = "authority";
+  option (amino.name) = "chain/x/validatorregistry/MsgUpdateParams";
+
+  // authority is the address that controls the module (defaults to x/gov unless overwritten).
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // params defines the module parameters to update.
+  //
+  // NOTE: All parameters must be supplied.
+  Params params = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// MsgUpdateParamsResponse defines the response structure for executing a
+// MsgUpdateParams message.
+message MsgUpdateParamsResponse {}

@@ -1,0 +1,35 @@
+services:
+  saicon-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: saicond:dev
+    container_name: saicon-node
+    environment:
+      SAICON_HOME: /home/saicon/.saicon
+      CHAIN_ID: saicon-localnet-1
+      MONIKER: saicon-node
+      # Optional demo/test knobs (see entrypoint-singlenode.sh) — empty by
+      # default, so genesis generation is unaffected unless the host sets them.
+      EPOCH_LENGTH_BLOCKS: ${EPOCH_LENGTH_BLOCKS:-}
+      GOV_VOTING_PERIOD: ${GOV_VOTING_PERIOD:-}
+      STAKEENGINE_CAP_FLOOR: ${STAKEENGINE_CAP_FLOOR:-}
+      # Data-retention profile: "validator" (prunes what safety allows) or
+      # "archive" (keeps everything, for the explorer and forensics).
+      NODE_PROFILE: ${NODE_PROFILE:-validator}
+    entrypoint: ["/usr/local/bin/entrypoint-singlenode.sh"]
+    ports:
+      - "26657:26657"  # Tendermint RPC
+      - "1317:1317"    # Cosmos REST (api)
+    volumes:
+      - saicon-data:/home/saicon/.saicon
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:26657/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  saicon-data:

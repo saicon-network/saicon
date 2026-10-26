@@ -1,0 +1,45 @@
+syntax = "proto3";
+
+package chain.participation.v1;
+
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/participation/types";
+
+// ParticipationScoreSnapshot is the per-epoch participation record for a
+// validator. See chain/docs/validators/README.md §5.
+message ParticipationScoreSnapshot {
+  string validator_address = 1 [(gogoproto.customname) = "ValidatorAddress"];
+  uint64 epoch_id = 2;
+  uint64 blocks_signed = 3;
+  uint64 blocks_missed = 4;
+  uint64 votes_participated = 5;
+  string uptime_fraction = 6 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string computed_score = 7 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  google.protobuf.Timestamp computed_at = 8 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+}
+
+// EmpiricalPointsState is the accumulated EP for a validator. EP gates rewards
+// (EP=0 -> rewards=0, invariant V-2). Floor for active validators is 1.
+message EmpiricalPointsState {
+  string validator_address = 1 [(gogoproto.customname) = "ValidatorAddress"];
+  string accumulated_ep = 2 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint64 last_epoch_update = 3;
+}

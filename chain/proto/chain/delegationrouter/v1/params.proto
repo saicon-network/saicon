@@ -1,0 +1,25 @@
+syntax = "proto3";
+package chain.delegationrouter.v1;
+
+import "amino/amino.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/delegationrouter/types";
+
+// Params are the tier-2 (governance-bounded) parameters of the delegation router.
+message Params {
+  option (amino.name) = "chain/x/delegationrouter/Params";
+  option (gogoproto.equal) = true;
+
+  // min_route_score: a validator whose last closed epoch scored below this
+  // receives no routed stake. Default 0.75, the Register's quarantine threshold.
+  string min_route_score = 1 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+
+  // max_route_legs: how many validators besides the primary one route may use.
+  uint32 max_route_legs = 2;
+}

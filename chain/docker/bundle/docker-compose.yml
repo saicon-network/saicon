@@ -1,0 +1,27 @@
+# SAiCoN single-node localnet — pre-built image, no build step.
+# The image saicon-node:v0.1.0 is loaded from the bundled tarball:
+#   docker load -i saicon-node-v0.1.0.image.tar.gz
+services:
+  saicon-node:
+    image: saicon-node:v0.1.0
+    container_name: saicon-node
+    environment:
+      SAICON_HOME: /home/saicon/.saicon
+      CHAIN_ID: saicon-localnet-1
+      MONIKER: saicon-node
+    entrypoint: ["/usr/local/bin/entrypoint-singlenode.sh"]
+    ports:
+      - "26657:26657"  # CometBFT RPC
+      - "1317:1317"    # Cosmos REST (api)
+    volumes:
+      - saicon-data:/home/saicon/.saicon
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:26657/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  saicon-data:

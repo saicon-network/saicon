@@ -1,0 +1,49 @@
+# Adds a fourth node running the archive retention profile to the 3-validator
+# testnet, so both profiles can be exercised on one chain at the same time.
+#
+#   docker compose -f chain/docker-compose.testnet.yml \
+#                  -f chain/docker-compose.testnet.archive.yml up -d
+#   bash chain/scripts/test-node-profiles.sh
+#
+# node0/1/2 are left exactly as the base file defines them: no NODE_PROFILE, so
+# they take the default. That is deliberate — the default is what a deployment
+# gets when nobody sets the variable, and it is the thing worth proving.
+services:
+  archive-init:
+    image: saicond:dev
+    container_name: saicon-archive-init
+    # root so it can chown node3's home to the uid the node services run as.
+    user: "0:0"
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+    environment:
+      CHAIN_ID: saicon-testnet-1
+    entrypoint: ["bash", "/scripts/init-archive.sh"]
+    volumes:
+      - testnet-data:/data
+      - ./docker/testnet:/scripts:ro
+    restart: "no"
+
+  node3:
+    image: saicond:dev
+    container_name: saicon-node3
+    depends_on:
+      archive-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_INDEX: "3"
+      NODE_PROFILE: "archive"
+    entrypoint: ["bash", "/scripts/entrypoint-node.sh"]
+    volumes:
+      - testnet-data:/data
+      - ./docker/testnet:/scripts:ro
+    ports:
+      - "26660:26657"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:26657/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s

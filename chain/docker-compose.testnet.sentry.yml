@@ -1,0 +1,98 @@
+# Puts node0 behind two sentries, so the layout ADR-0015 describes is exercised
+# rather than only written down.
+#
+#   docker compose -f chain/docker-compose.testnet.yml \
+#                  -f chain/docker-compose.testnet.sentry.yml up -d
+#   bash chain/scripts/test-sentry-layout.sh
+#
+# node0 runs with NODE_EXPOSURE=validator: RPC on loopback inside its container,
+# REST off. The base file still publishes 26657 and 1317 for node0; with nothing
+# listening on the container's address those host ports lead nowhere.
+#
+# The sentries mount the same testnet-data volume as the validators, so in this
+# laboratory they can read node0's keys. That is a property of the local setup,
+# not of the layout: a real sentry holds no validator or operator key.
+#
+# node1 and node2 are left exactly as the base file defines them — open, pex on.
+# That is deliberate: the contrast is the point. One validator is reachable only
+# through machines its operator runs; two are reachable by anyone, which is what
+# the network looks like today.
+services:
+  sentry-init:
+    image: saicond:dev
+    container_name: saicon-sentry-init
+    # root so it can chown the new homes to the uid the node services run as.
+    user: "0:0"
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+    environment:
+      CHAIN_ID: saicon-testnet-1
+    entrypoint: ["bash", "/scripts/init-sentries.sh"]
+    volumes:
+      - testnet-data:/data
+      - ./docker/testnet:/scripts:ro
+    restart: "no"
+
+  # node0 stops facing the network directly: pex off, and the only peers it dials
+  # are its own sentries (ADR-0015 D1).
+  node0:
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+      sentry-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_INDEX: "0"
+      NODE_EXPOSURE: "validator"
+      SENTRY_PEERS_FILE: "/data/sentry-peers.txt"
+
+  node4:
+    image: saicond:dev
+    container_name: saicon-node4
+    depends_on:
+      sentry-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_INDEX: "4"
+      NODE_PROFILE: "full"
+      NODE_EXPOSURE: "sentry"
+      PRIVATE_PEER_IDS_FILE: "/data/validator0-id.txt"
+    entrypoint: ["bash", "/scripts/entrypoint-node.sh"]
+    volumes:
+      - testnet-data:/data
+      - ./docker/testnet:/scripts:ro
+    ports:
+      - "26661:26657"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:26657/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  node5:
+    image: saicond:dev
+    container_name: saicon-node5
+    depends_on:
+      sentry-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_INDEX: "5"
+      NODE_PROFILE: "full"
+      NODE_EXPOSURE: "sentry"
+      PRIVATE_PEER_IDS_FILE: "/data/validator0-id.txt"
+    entrypoint: ["bash", "/scripts/entrypoint-node.sh"]
+    volumes:
+      - testnet-data:/data
+      - ./docker/testnet:/scripts:ro
+    ports:
+      - "26662:26657"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:26657/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s

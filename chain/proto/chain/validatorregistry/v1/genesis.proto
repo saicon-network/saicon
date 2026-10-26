@@ -1,0 +1,32 @@
+syntax = "proto3";
+package chain.validatorregistry.v1;
+
+import "amino/amino.proto";
+import "chain/validatorregistry/v1/params.proto";
+import "chain/validatorregistry/v1/types.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/validatorregistry/types";
+
+// GenesisState defines the validatorregistry module's genesis state.
+message GenesisState {
+  // params defines all the parameters of the module.
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // validators is the registry as of the export: SAiCoN status, lock-up timing
+  // and the compliance mirror for every known validator.
+  //
+  // Without it an export/import cycle silently erases the whole registry: every
+  // validator returns with no record, so participation and rewards see "not
+  // found" and nobody ever earns again, AND the V-3 self-stake lock-up stops
+  // being enforced (the ante decorator reads this same metadata, so a missing
+  // record reads as "not locked"). A routine coordinated restart would void
+  // every lock-up commitment.
+  repeated ValidatorMetadata validators = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

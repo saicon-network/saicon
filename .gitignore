@@ -1,0 +1,51 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.keystore
+
+# Build artifacts
+build/
+dist/
+target/
+*.o
+*.so
+*.dylib
+*.exe
+
+# Cosmos / Ignite
+.ignite/
+chain/build/
+chain/data/
+
+# Node / TypeScript
+node_modules/
+.next/
+coverage/
+*.tsbuildinfo
+.npm
+.yarn-integrity
+
+# Go
+*.test
+vendor/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+.cursor/
+
+# Logs
+*.log
+logs/
+tmp/
+
+# Generated docs
+__pycache__/
+
+# local worktrees / session scratch

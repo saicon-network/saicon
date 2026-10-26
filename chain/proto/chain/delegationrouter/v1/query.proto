@@ -1,0 +1,59 @@
+syntax = "proto3";
+package chain.delegationrouter.v1;
+
+import "amino/amino.proto";
+import "chain/delegationrouter/v1/params.proto";
+import "chain/delegationrouter/v1/tx.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/delegationrouter/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/saicon/chain/delegationrouter/v1/params";
+  }
+  // Route dry-runs DelegateRouted: where the amount would go, without moving it.
+  rpc Route(QueryRouteRequest) returns (QueryRouteResponse) {
+    option (google.api.http).get = "/saicon/chain/delegationrouter/v1/route";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message QueryRouteRequest {
+  string delegator = 1;
+  string validator = 2;
+  // amount in nscn, as a decimal string.
+  string amount = 3;
+}
+
+message QueryRouteResponse {
+  // legs are delegated now.
+  repeated RouteLeg legs = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // queued would join the queue.
+  repeated RouteLeg queued = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // fits is the amount, in nscn, the route could place; equals the request when reason is empty.
+  string fits = 3 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // reason is empty when the message would succeed, else the error it would return.
+  string reason = 4;
+}

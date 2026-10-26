@@ -1,0 +1,26 @@
+syntax = "proto3";
+package chain.stakeengine.v1;
+
+import "amino/amino.proto";
+import "chain/stakeengine/v1/params.proto";
+import "chain/stakeengine/v1/types.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/stakeengine/types";
+
+// GenesisState defines the stakeengine module's genesis state.
+message GenesisState {
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // cap_state is absent on a fresh genesis; InitGenesis then computes it, so the
+  // caps exist from block 1 rather than from the first epoch close.
+  CapState cap_state = 2;
+  // queue carries the entries; their coins are in the module account's bank balance.
+  repeated QueueEntry queue = 3 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  uint64 next_queue_id = 4;
+}

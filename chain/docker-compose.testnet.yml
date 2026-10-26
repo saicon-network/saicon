@@ -1,0 +1,112 @@
+# 3-validator SAiCoN testnet.
+#
+#   docker compose -f chain/docker-compose.testnet.yml up -d --build
+#
+# genesis-init (one-shot, runs as root) builds a shared 3-validator genesis +
+# peers.txt on the testnet-data volume, then exits. node0/node1/node2 start once
+# it completes and peer up by docker service-name DNS.
+#
+# A LOCAL LABORATORY, NOT A DEPLOYMENT TEMPLATE. Every node shares the one
+# testnet-data volume, which holds all three consensus keys and a single test
+# keyring (unencrypted on disk) with all three operator keys, and every container
+# runs as the same uid. Whoever reaches one container reaches every validator's
+# keys. A network with value runs each validator on its own host with its own
+# keys — chain/docs/MULTINODE-JOIN.md and ADR-0015.
+services:
+  genesis-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: saicond:dev
+    container_name: saicon-genesis-init
+    # root so it can chown the freshly-mounted (root-owned) named volume to uid 1000.
+    user: "0:0"
+    environment:
+      CHAIN_ID: saicon-testnet-1
+      # Empty on the public devnet; the router demo sets them (see gen-genesis.sh).
+      EPOCH_LENGTH_BLOCKS: ${EPOCH_LENGTH_BLOCKS:-}
+      GOV_VOTING_PERIOD: ${GOV_VOTING_PERIOD:-}
+    entrypoint: ["bash", "/scripts/gen-genesis.sh"]
+    volumes:
+      - testnet-data:/data
+      - ./docker/testnet:/scripts:ro
+    restart: "no"
+
+  node0:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: saicond:dev
+    container_name: saicon-node0
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_INDEX: "0"
+    entrypoint: ["bash", "/scripts/entrypoint-node.sh"]
+    volumes:
+      - testnet-data:/data
+      - ./docker/testnet:/scripts:ro
+    ports:
+      - "26657:26657"
+      - "1317:1317"    # Cosmos REST (explorer, api.saicon.world)
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:26657/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  node1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: saicond:dev
+    container_name: saicon-node1
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_INDEX: "1"
+    entrypoint: ["bash", "/scripts/entrypoint-node.sh"]
+    volumes:
+      - testnet-data:/data
+      - ./docker/testnet:/scripts:ro
+    ports:
+      - "26658:26657"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:26657/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+  node2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: saicond:dev
+    container_name: saicon-node2
+    depends_on:
+      genesis-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_INDEX: "2"
+    entrypoint: ["bash", "/scripts/entrypoint-node.sh"]
+    volumes:
+      - testnet-data:/data
+      - ./docker/testnet:/scripts:ro
+    ports:
+      - "26659:26657"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:26657/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  testnet-data:

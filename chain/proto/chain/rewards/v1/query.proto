@@ -1,0 +1,85 @@
+syntax = "proto3";
+package chain.rewards.v1;
+
+import "amino/amino.proto";
+import "chain/rewards/v1/params.proto";
+import "chain/rewards/v1/types.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/rewards/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  // Parameters queries the parameters of the module.
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/saicon/chain/rewards/v1/params";
+  }
+
+  // RewardSnapshot returns the reward decision for a validator at an epoch:
+  // eligible + minted amount, or ineligible + denial reason.
+  rpc RewardSnapshot(QueryRewardSnapshotRequest) returns (QueryRewardSnapshotResponse) {
+    option (google.api.http).get = "/saicon/chain/rewards/v1/snapshot/{validator_address}/{epoch_id}";
+  }
+
+  // RewardSummary aggregates a validator's emissions over a closed epoch range.
+  // The card behind this needs a month at a time; a month is ~5 200 epochs, so
+  // the summing happens here rather than over HTTP.
+  rpc RewardSummary(QueryRewardSummaryRequest) returns (QueryRewardSummaryResponse) {
+    option (google.api.http).get = "/saicon/chain/rewards/v1/summary/{validator_address}/{from_epoch}/{to_epoch}";
+  }
+}
+
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  // params holds all the parameters of this module.
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// QueryRewardSnapshotRequest is request type for the Query/RewardSnapshot RPC method.
+message QueryRewardSnapshotRequest {
+  string validator_address = 1;
+  uint64 epoch_id = 2;
+}
+
+// QueryRewardSnapshotResponse is response type for the Query/RewardSnapshot RPC method.
+message QueryRewardSnapshotResponse {
+  RewardSnapshot snapshot = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// QueryRewardSummaryRequest is the request for Query/RewardSummary. Inclusive on
+// both ends, capped.
+message QueryRewardSummaryRequest {
+  string validator_address = 1;
+  uint64 from_epoch = 2;
+  uint64 to_epoch = 3;
+}
+
+// QueryRewardSummaryResponse is the response for Query/RewardSummary.
+//
+// epochs_with_record is how many epochs in the range produced a snapshot at all;
+// epochs_paid is how many of those were eligible. The difference is the number of
+// recorded denials, which is what makes "broke yesterday" distinguishable from
+// "never worked".
+message QueryRewardSummaryResponse {
+  string total_amount = 1 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string denom = 2;
+  uint64 epochs_requested = 3;
+  uint64 epochs_with_record = 4;
+  uint64 epochs_paid = 5;
+}

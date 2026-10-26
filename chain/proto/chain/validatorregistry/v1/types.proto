@@ -1,0 +1,87 @@
+syntax = "proto3";
+
+package chain.validatorregistry.v1;
+
+import "chain/validatorregistry/v1/status.proto";
+import "gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/validatorregistry/types";
+
+// ValidatorMetadata holds SAiCoN-specific validator state, extending Cosmos SDK
+// x/staking with status enum, lock-up tracking, and compliance flag.
+//
+// Source-of-truth for: status, lock-up timing.
+// Cached: compliance_flag (mirror of x/compliance for fast gates).
+//
+// See chain/docs/validators/README.md and ADR-0003.
+message ValidatorMetadata {
+  // validator_address is the operator address (valoper bech32 string).
+  string validator_address = 1 [
+    (gogoproto.customname) = "ValidatorAddress",
+    (gogoproto.moretags) = "yaml:\"validator_address\""
+  ];
+
+  // status is the current SAiCoN validator status (see Status enum).
+  Status status = 2;
+
+  // bonding_start is the timestamp when validator entered STATUS_BONDING.
+  // Used to enforce the self-stake lock-up.
+  google.protobuf.Timestamp bonding_start = 3 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+
+  // lockup_duration_seconds is the configured lock-up period at bonding time.
+  // Frozen for this validator: changing chain param does not extend existing.
+  int64 lockup_duration_seconds = 4;
+
+  // unbonding_start is set when validator transitions to STATUS_UNBONDING.
+  // Zero/unset value means not unbonding.
+  google.protobuf.Timestamp unbonding_start = 5 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = true
+  ];
+
+  // compliance_flag is a cached mirror of x/compliance state for fast gates.
+  // Invariant V-4.1: must always equal x/compliance.LastEvent.Compliant.
+  bool compliance_flag = 6;
+
+  // last_status_change_height is the block height of the last status transition.
+  // Used for audit and for some invariant checks (e.g. cooldown).
+  int64 last_status_change_height = 7;
+
+  // bonding_start_height is the block height at which the lock-up window began
+  // (validator first bonded / registered). Frozen for this validator — unlike
+  // last_status_change_height it never moves on later transitions. The V-3
+  // EndBlock invariant uses it to distinguish a self-stake exit created WHILE
+  // locked (a real bypass -> halt) from a pre-lock exit that was created before
+  // the validator ever locked and merely lingers into the window (legitimate,
+  // must NOT halt the chain).
+  int64 bonding_start_height = 8;
+
+  // unbonding_complete_time is the instant the unstake cooldown ends, copied from
+  // x/staking's validator.UnbondingTime when unbonding begins. It is frozen at that
+  // moment, so a later governance change of the staking UnbondingTime parameter
+  // cannot retroactively turn a legitimate exit into an invariant violation.
+  // Zero when the validator has never begun unbonding. Used by invariant V-5.
+  google.protobuf.Timestamp unbonding_complete_time = 9 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+
+  // pre_unbonding_status is the status the validator held when it left the bonded
+  // set, recorded so an ABORTED exit can be undone without guessing.
+  //
+  // Both ACTIVE and QUARANTINED enter STATUS_UNBONDING, so on a re-bond the prior
+  // status is not recoverable from the status field alone; restoring blindly to
+  // ACTIVE would let a validator launder a quarantine by unbonding and re-bonding.
+  // The compliance_flag mirror cannot stand in for this: it is hardcoded to true
+  // on the registration and auto-create paths and its V-4.1 invariant is not yet
+  // enforced, so it is not a source of truth.
+  //
+  // STATUS_UNSPECIFIED means "not recorded" (a record that entered unbonding
+  // before this field existed); the restore treats that as untrusted and returns
+  // the validator QUARANTINED rather than ACTIVE.
+  Status pre_unbonding_status = 10;
+}

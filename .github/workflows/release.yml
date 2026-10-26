@@ -1,0 +1,83 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+    # A called workflow inherits the caller's token; tests need only to read.
+    permissions:
+      contents: read
+
+  binaries:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux,  goarch: amd64 }
+          - { goos: linux,  goarch: arm64 }
+          - { goos: darwin, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: chain/go.mod
+          cache-dependency-path: chain/go.sum
+      - name: Build saicond
+        working-directory: chain
+        env:
+          # Same as chain/Dockerfile: a pure-Go build, goleveldb backend.
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          mkdir -p "../dist/pkg"
+          go build \
+            -ldflags "-X github.com/cosmos/cosmos-sdk/version.Name=saicon \
+                      -X github.com/cosmos/cosmos-sdk/version.AppName=saicond \
+                      -X github.com/cosmos/cosmos-sdk/version.Version=${VERSION} \
+                      -X github.com/cosmos/cosmos-sdk/version.Commit=${COMMIT}" \
+            -o ../dist/pkg/saicond ./cmd/saicond
+      - name: Third-party licenses
+        working-directory: chain
+        # Runs on the build host; -goos/-goarch describe the release target.
+        run: >-
+          go run ./scripts/third-party-licenses -out ../dist/pkg/third_party
+          -goos ${{ matrix.goos }} -goarch ${{ matrix.goarch }} -ref ${{ github.ref_name }}
+      - name: Package
+        run: |
+          name="saicond_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          cp LICENSE NOTICE dist/pkg/
+          mv dist/pkg "dist/${name}"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saicond-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum *.tar.gz > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS

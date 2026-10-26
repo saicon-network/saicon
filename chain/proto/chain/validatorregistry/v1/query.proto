@@ -1,0 +1,64 @@
+syntax = "proto3";
+package chain.validatorregistry.v1;
+
+import "amino/amino.proto";
+import "chain/validatorregistry/v1/params.proto";
+import "chain/validatorregistry/v1/types.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/validatorregistry/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  // Parameters queries the parameters of the module.
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/saicon/chain/validatorregistry/v1/params";
+  }
+
+  // Validator queries metadata for a single validator by operator address.
+  rpc Validator(QueryValidatorRequest) returns (QueryValidatorResponse) {
+    option (google.api.http).get = "/saicon/chain/validatorregistry/v1/validators/{validator_address}";
+  }
+
+  // Validators lists validator metadata, optionally filtered by status.
+  rpc Validators(QueryValidatorsRequest) returns (QueryValidatorsResponse) {
+    option (google.api.http).get = "/saicon/chain/validatorregistry/v1/validators";
+  }
+}
+
+// QueryValidatorRequest is the request for Query/Validator.
+message QueryValidatorRequest {
+  string validator_address = 1;
+}
+
+// QueryValidatorResponse is the response for Query/Validator.
+message QueryValidatorResponse {
+  ValidatorMetadata validator = 1 [(gogoproto.nullable) = false];
+}
+
+// QueryValidatorsRequest is the request for Query/Validators.
+// status_filter is the lowercase status string (e.g. "active"); empty = all.
+message QueryValidatorsRequest {
+  string status_filter = 1;
+  cosmos.base.query.v1beta1.PageRequest pagination = 2;
+}
+
+// QueryValidatorsResponse is the response for Query/Validators.
+message QueryValidatorsResponse {
+  repeated ValidatorMetadata validators = 1 [(gogoproto.nullable) = false];
+  cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  // params holds all the parameters of this module.
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

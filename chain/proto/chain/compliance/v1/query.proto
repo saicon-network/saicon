@@ -1,0 +1,49 @@
+syntax = "proto3";
+package chain.compliance.v1;
+
+import "amino/amino.proto";
+import "chain/compliance/v1/params.proto";
+import "chain/compliance/v1/types.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/compliance/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  // Parameters queries the parameters of the module.
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/saicon/chain/compliance/v1/params";
+  }
+
+  // Compliance returns the compliance state of a single validator.
+  rpc Compliance(QueryComplianceRequest) returns (QueryComplianceResponse) {
+    option (google.api.http).get = "/saicon/chain/compliance/v1/compliance/{validator_address}";
+  }
+}
+
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  // params holds all the parameters of this module.
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// QueryComplianceRequest is request type for the Query/Compliance RPC method.
+message QueryComplianceRequest {
+  string validator_address = 1;
+}
+
+// QueryComplianceResponse is response type for the Query/Compliance RPC method.
+message QueryComplianceResponse {
+  ComplianceState state = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

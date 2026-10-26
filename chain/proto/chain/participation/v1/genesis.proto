@@ -1,0 +1,66 @@
+syntax = "proto3";
+package chain.participation.v1;
+
+import "amino/amino.proto";
+import "chain/participation/v1/params.proto";
+import "chain/participation/v1/types.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/participation/types";
+
+// EpochCount is one validator's running count for the epoch in progress.
+//
+// Signed and missed are two collections, not one record with two fields, because
+// the chain writes exactly one of them per block: a validator that has never
+// missed has no entry on the missed side at all. Merging them into a single
+// genesis record would invent that entry on export and create it on import —
+// state the original chain did not have.
+message EpochCount {
+  string validator_address = 1 [(gogoproto.customname) = "ValidatorAddress"];
+  uint64 count = 2;
+}
+
+// GenesisState defines the participation module's genesis state.
+//
+// Everything below params exists because the module's whole state used to end at
+// params: an export/import cycle — a coordinated upgrade, a state migration, a
+// genesis rebuild — silently erased every score snapshot and every accumulated
+// EP. Eligibility is ACTIVE and compliant and EP > 0 (invariant V-2), so after
+// such a restart nobody earns again until EP re-accumulates, and nothing reports
+// that it happened. Found 2026-08-15 by TestAppImportExport: 99 key/value pairs
+// in the store against 1 after a round trip.
+message GenesisState {
+  // params defines all the parameters of the module.
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // scores is every per-epoch participation snapshot. The snapshot carries its
+  // own epoch_id and validator_address, so the store key is reconstructed from
+  // the record rather than duplicated beside it.
+  repeated ParticipationScoreSnapshot scores = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // empirical_points is accumulated EP per validator — the value that gates
+  // every reward.
+  repeated EmpiricalPointsState empirical_points = 3 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // epoch_blocks_signed / epoch_blocks_missed are the partial counts for the
+  // epoch that was in progress at export. Dropping them would silently discard
+  // part of an epoch's work and score every validator on a shortened window.
+  repeated EpochCount epoch_blocks_signed = 4 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  repeated EpochCount epoch_blocks_missed = 5 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

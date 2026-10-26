@@ -1,0 +1,11 @@
+.git
+release/
+*.md
+vendor/
+*.log
+*.dot
+*.ign
+.idea/
+.vscode/
+.DS_Store
+vue/

@@ -1,0 +1,50 @@
+syntax = "proto3";
+package chain.rewards.v1;
+
+import "amino/amino.proto";
+import "chain/rewards/v1/params.proto";
+import "chain/rewards/v1/types.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/rewards/types";
+
+// GenesisState defines the rewards module's genesis state.
+//
+// As with participation, everything below params exists because the module's
+// exported state used to end at params — see that module's genesis.proto for the
+// failure this caused. Here the loss is the payment record itself plus two
+// accumulators that decide how much the next epoch mints.
+message GenesisState {
+  // params defines all the parameters of the module.
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // snapshots is the per-epoch emission record per validator, including the
+  // ones that were paid nothing and why. It is the only audit trail of what the
+  // chain minted and to whom.
+  repeated RewardSnapshot snapshots = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // remainder is base units left over when an epoch pool did not divide evenly.
+  // It is carried into the next epoch's pool (ADR-0011 D5); losing it across a
+  // restart quietly destroys coins that were already accounted for.
+  string remainder = 3 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+
+  // observed_gas_fees is the gas revenue seen so far in the epoch in progress.
+  // It reduces how much the next mint must create (ADR-0011 D2), so losing it
+  // makes the chain mint more than the security budget allows for that epoch.
+  string observed_gas_fees = 4 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}

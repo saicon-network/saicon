@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package chain.validatorregistry.v1;
+
+option go_package = "github.com/saicon-network/saicon/chain/x/validatorregistry/types";
+
+// Status defines the validator status in the SAiCoN Proof of Participation model.
+// See chain/docs/validators/README.md §2 and chain/docs/adr/ADR-0003-validator-status-enum.md.
+//
+// Status numeric values are FROZEN — never reuse or rename. Add new statuses
+// with numbers 7+ only.
+enum Status {
+  // STATUS_UNSPECIFIED is the proto3 default — should never appear in runtime
+  // state. Encountering it indicates a bug (uninitialized field).
+  STATUS_UNSPECIFIED = 0;
+
+  // STATUS_BONDING — validator registered, lock-up activated, awaiting activation.
+  STATUS_BONDING = 1;
+
+  // STATUS_ACTIVE — validator in active set, participating in consensus.
+  STATUS_ACTIVE = 2;
+
+  // STATUS_QUARANTINED — compliance violation detected; isolated from consensus
+  // but stake remains locked.
+  STATUS_QUARANTINED = 3;
+
+  // STATUS_JAILED — severe violation (double sign, prolonged downtime).
+  STATUS_JAILED = 4;
+
+  // STATUS_UNBONDING — voluntary unbond requested, cooldown in progress.
+  STATUS_UNBONDING = 5;
+
+  // STATUS_INACTIVE — validator fully exited; state can be removed after grace.
+  STATUS_INACTIVE = 6;
+}

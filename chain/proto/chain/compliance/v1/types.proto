@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package chain.compliance.v1;
+
+import "gogoproto/gogo.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/compliance/types";
+
+// ComplianceEventType classifies the event that last changed a validator's
+// compliance state. See chain/docs/validators/README.md §4.2.
+enum ComplianceEventType {
+  COMPLIANCE_EVENT_TYPE_UNSPECIFIED = 0;
+  // Identity verification failed (medium severity).
+  COMPLIANCE_EVENT_TYPE_IDENTITY_FAILED = 1;
+  // KYC/AML re-attestation expired (medium severity).
+  COMPLIANCE_EVENT_TYPE_KYC_EXPIRED = 2;
+  // External compliance flag set by admin (high severity).
+  COMPLIANCE_EVENT_TYPE_EXTERNAL_FLAG = 3;
+  // Critical protocol violation, e.g. double-sign (critical severity).
+  COMPLIANCE_EVENT_TYPE_CRITICAL_VIOLATION = 4;
+  // Compliance restored (re-attestation completed / flag cleared).
+  COMPLIANCE_EVENT_TYPE_RESTORED = 5;
+}
+
+// ComplianceState is the source-of-truth compliance record for a validator,
+// stored in x/compliance. The boolean C flag is mirrored into
+// x/validatorregistry.ValidatorMetadata.ComplianceFlag for fast gates
+// (invariant V-4.1).
+message ComplianceState {
+  // validator_address is the operator (valoper) bech32 string.
+  string validator_address = 1 [(gogoproto.customname) = "ValidatorAddress"];
+
+  // compliant is the C flag: true = compliant (C=1), false = non-compliant (C=0).
+  bool compliant = 2;
+
+  // last_event is the most recent compliance event affecting this validator.
+  ComplianceEventType last_event = 3;
+
+  // last_event_time is when last_event was recorded.
+  google.protobuf.Timestamp last_event_time = 4 [
+    (gogoproto.stdtime) = true,
+    (gogoproto.nullable) = false
+  ];
+
+  // reason is a free-text human-readable explanation for the last event.
+  string reason = 5;
+}

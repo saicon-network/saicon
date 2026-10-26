@@ -1,0 +1,83 @@
+syntax = "proto3";
+package chain.stakeengine.v1;
+
+import "amino/amino.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/stakeengine/types";
+
+// Params are the tier-2 (governance-bounded, ADR-0013) parameters of the stake
+// engine. The entry floor is NOT here: it is a tier-1 code constant,
+// EntryFloorNscn, so governance has nothing to lower.
+message Params {
+  option (amino.name) = "chain/x/stakeengine/Params";
+  option (gogoproto.equal) = true;
+
+  // max_supply_fraction is the first arm of the global bonded cap:
+  // global_cap = min(max_supply_fraction x max supply, public_circulating_fraction x public circulating).
+  string max_supply_fraction = 1 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+
+  // public_circulating_fraction is the second arm of the global bonded cap.
+  string public_circulating_fraction = 2 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+
+  // validator_cap_fraction is the share of the EWMA of total bonded that one
+  // validator may hold before it stops accepting new delegation.
+  string validator_cap_fraction = 3 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+
+  // validator_cap_floor is a lower bound on the per-validator cap, in nscn. On a
+  // network with few validators "2% of the network" is meaningless; the floor
+  // keeps delegation possible until there are validators to share it. Default 0
+  // (the strict rule); the devnet genesis sets it explicitly.
+  string validator_cap_floor = 4 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+
+  // ewma_window_epochs is N in the EWMA of total bonded, alpha = 2 / (N + 1).
+  uint64 ewma_window_epochs = 5;
+
+  // min_queue_entry is the smallest amount, in nscn, a queue entry may carry.
+  string min_queue_entry = 6 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+
+  // max_queue_entries bounds the queue's size in state.
+  uint64 max_queue_entries = 7;
+
+  // max_fills_per_block bounds the work EndBlock does filling the queue.
+  uint64 max_fills_per_block = 8;
+
+  // excluded_addresses are accounts whose holdings are not publicly owned —
+  // treasury, team, foundation, vesting. Everything they hold is subtracted from
+  // public circulating supply. Empty on the devnet.
+  repeated string excluded_addresses = 9 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // max_validators_per_delegator is how many distinct validators one delegator
+  // may hold a delegation to or a queue entry for (S7, Register "≤ 3"). An
+  // operator's self-delegation to its own validator does not count.
+  uint32 max_validators_per_delegator = 10;
+
+  // min_delegation is the smallest MsgDelegate, MsgDelegateRouted or
+  // MsgEnqueueDelegation, in nscn (S7, Register: 100 SCN).
+  string min_delegation = 11 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}

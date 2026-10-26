@@ -1,0 +1,79 @@
+syntax = "proto3";
+package chain.delegationrouter.v1;
+
+import "amino/amino.proto";
+import "chain/delegationrouter/v1/params.proto";
+import "cosmos/base/v1beta1/coin.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/delegationrouter/types";
+
+// Msg defines the Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // UpdateParams updates the module parameters. The authority defaults to x/gov.
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+
+  // DelegateRouted delegates to the chosen validator and, when it lacks room,
+  // routes the overflow to other validators or the stake queue.
+  rpc DelegateRouted(MsgDelegateRouted) returns (MsgDelegateRoutedResponse);
+}
+
+message MsgUpdateParams {
+  option (cosmos.msg.v1.signer) = "authority";
+  option (amino.name) = "chain/x/delegationrouter/MsgUpdateParams";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  // NOTE: All parameters must be supplied.
+  Params params = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message MsgUpdateParamsResponse {}
+
+message MsgDelegateRouted {
+  option (cosmos.msg.v1.signer) = "delegator";
+  option (amino.name) = "chain/x/delegationrouter/MsgDelegateRouted";
+
+  string delegator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string validator = 2 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  cosmos.base.v1beta1.Coin amount = 3 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message RouteLeg {
+  string validator = 1;
+  string amount = 2 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+message QueuedLeg {
+  string validator = 1;
+  string amount = 2 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint64 entry_id = 3;
+}
+
+message MsgDelegateRoutedResponse {
+  repeated RouteLeg legs = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  repeated QueuedLeg queued = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

@@ -1,0 +1,32 @@
+syntax = "proto3";
+package chain.compliance.v1;
+
+import "amino/amino.proto";
+import "chain/compliance/v1/params.proto";
+import "chain/compliance/v1/types.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/compliance/types";
+
+// GenesisState defines the compliance module's genesis state.
+message GenesisState {
+  // params defines all the parameters of the module.
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // compliance_states is the C flag and its evidence trail for every validator
+  // the module knows about.
+  //
+  // This is the SOURCE OF TRUTH that x/validatorregistry only mirrors, so losing
+  // it across an export/import is worse than losing the mirror: the reward gate
+  // reads a missing state as innocent (`compliant := !found || state.Compliant`),
+  // so a validator sanctioned with C=0 would become reward-eligible again after a
+  // routine coordinated restart, and the whole evidence trail — last event, time
+  // and reason — would be gone.
+  repeated ComplianceState compliance_states = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}

@@ -1,0 +1,104 @@
+name: docker
+
+# Every push to main checks that the image builds; only a release tag publishes it.
+# A published image ships with the complete source of the copyleft Alpine packages
+# it contains (busybox, bash, readline, apk-tools, ...), attached to the release,
+# so the image is pushed only after those sources were collected for exactly the
+# package versions inside it.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+    # A called workflow inherits the caller's token; tests need only to read.
+    permissions:
+      contents: read
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # attach the Alpine sources to the release
+      packages: write
+    env:
+      RELEASE: ${{ github.ref_type == 'tag' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Lowercase repository owner
+        id: owner
+        run: echo "name=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.owner.outputs.name }}/saicon
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: chain
+          file: chain/Dockerfile
+          load: true
+          tags: saicon-release-check:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # Without these `saicond version` inside the image reads dev / unknown.
+          build-args: |
+            VERSION=${{ github.ref_type == 'tag' && github.ref_name || format('main-{0}', github.sha) }}
+            COMMIT=${{ github.sha }}
+      - name: Alpine sources for the packages in the image
+        if: env.RELEASE == 'true'
+        run: |
+          mkdir -p alpine-src
+          docker run --rm --entrypoint cat saicon-release-check:local \
+            /usr/share/licenses/saicon/alpine-packages.txt > alpine-src/alpine-packages.txt
+          docker run --rm -v "$PWD/chain/docker:/s:ro" -v "$PWD/alpine-src:/w" alpine:3.20 \
+            sh /s/alpine-sources.sh /w/alpine-packages.txt /w/out
+          tar -C alpine-src/out -czf "saicon-image-alpine-sources_${GITHUB_REF_NAME}.tar.gz" .
+      - name: Log in to GHCR
+        if: env.RELEASE == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push
+        id: push
+        if: env.RELEASE == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: chain
+          file: chain/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The same cache as the build above, so the pushed layers are the ones
+          # whose packages the sources were collected for.
+          cache-from: type=gha
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ github.sha }}
+          # An SBOM (every package in the image, with its license) and build provenance
+          # are attached to the image as attestations.
+          sbom: true
+          provenance: mode=max
+      - name: The pushed image carries the packages the sources are for
+        if: env.RELEASE == 'true'
+        run: |
+          img="ghcr.io/${{ steps.owner.outputs.name }}/saicon@${{ steps.push.outputs.digest }}"
+          docker pull -q "$img" >/dev/null
+          docker run --rm --entrypoint cat "$img" /usr/share/licenses/saicon/alpine-packages.txt \
+            | diff alpine-src/alpine-packages.txt - \
+            || { echo "::error::the pushed image's packages differ from the ones whose sources were collected"; exit 1; }
+      - name: Attach the Alpine sources to the release
+        if: env.RELEASE == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: saicon-image-alpine-sources_${{ github.ref_name }}.tar.gz

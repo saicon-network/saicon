@@ -1,0 +1,18 @@
+SAiCoN node image — licenses
+
+saicond
+  SAiCoN is licensed under the Apache License 2.0 (LICENSE and NOTICE in this
+  directory, when the image is built from the public repository). The licenses of
+  the Go modules and the Go standard library linked into saicond are in
+  THIRD_PARTY_LICENSES.md, licenses/ and source/ next to this file.
+
+Operating system
+  The image is based on Alpine Linux (alpine:3.20) and adds the Alpine packages
+  ca-certificates, bash and jq. alpine-packages.txt lists every installed package
+  with its version and license, as recorded by apk when the image was built.
+  These packages are unmodified Alpine builds. The complete corresponding source
+  of every copyleft-licensed one among them (GPL, LGPL, MPL: busybox, bash,
+  readline, apk-tools and others) — its build recipe, patches and upstream
+  archives, for exactly the versions in this image — is attached to the image's
+  release as saicon-image-alpine-sources_<version>.tar.gz:
+  https://github.com/saicon-network/saicon/releases

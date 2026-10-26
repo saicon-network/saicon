@@ -1,0 +1,68 @@
+syntax = "proto3";
+package chain.rewards.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/rewards/types";
+
+// Params defines the parameters for the module.
+//
+// v0.1 MOCK emission model (Decision D2 — independent gated emission): each
+// eligible validator (status==active AND C==1 AND EP>0) is minted a flat
+// reward_per_epoch_amount of denom "nscn" once per epoch — nscn is the base
+// denom; SCN is nscn x 10^8. The full EP-proportional / inflation-scheduled
+// reward curve is DEFERRED.
+message Params {
+  option (amino.name) = "chain/x/rewards/Params";
+  option (gogoproto.equal) = true;
+
+  // reward_per_epoch_amount was the flat per-validator reward of the v0.1 mock
+  // emission model.
+  //
+  // SUPERSEDED by the annual security budget (fields 4-6, ADR-0011 D1): the
+  // epoch pool is now sized from total bonded stake and current supply, then
+  // split among the eligible validators. This field is retained so existing
+  // genesis files and param sets still decode, and is no longer read by the
+  // emission path. It will be removed once no live chain carries it.
+  uint64 reward_per_epoch_amount = 1;
+
+  // enabled is the kill-switch for emission. When false, DistributeEpochRewards
+  // is a no-op (no minting). Default true.
+  bool enabled = 2;
+
+  // blocks_per_year converts the ANNUAL security budget into a per-epoch target.
+  //
+  // Epochs are counted in BLOCKS, never wall-clock (Register §2.1), so the
+  // conversion must be too: epochs_per_year = blocks_per_year /
+  // x/participation.epoch_length_blocks. Keeping the epoch length in
+  // x/participation and only the yearly block count here avoids storing the same
+  // fact twice, which is how the two drift apart.
+  //
+  // Default 6,311,520 — the x/mint precedent for 5-second blocks.
+  uint64 blocks_per_year = 3;
+
+  // budget_bonded_rate, budget_floor_rate and budget_ceiling_rate are the three
+  // clip constants of the Register's annual security budget (ADR-0011 D1):
+  //
+  //   AnnualSecurityBudget = clip(bonded_rate x TotalBonded,
+  //                               floor_rate  x CurrentSupply,
+  //                               ceiling_rate x CurrentSupply)
+  //
+  // Stored as decimal strings (LegacyDec) so governance can tune them within the
+  // bounds ADR-0013 will set. Defaults are the Register's adopted values
+  // 0.15 / 0.005 / 0.0075 divided by seven (S6, 2026-09-24). The Register values
+  // were inputs to the Stage 5 calibration rather than outputs of it.
+  string budget_bonded_rate = 4 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string budget_floor_rate = 5 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string budget_ceiling_rate = 6 [
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+}

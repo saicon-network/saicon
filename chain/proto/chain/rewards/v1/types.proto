@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package chain.rewards.v1;
+
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/rewards/types";
+
+// RewardSnapshot is the per-epoch, per-validator emission record produced by
+// DistributeEpochRewards. It captures whether the validator passed the
+// eligibility gate (status==active AND C==1 AND EP>0) and, if so, the minted
+// reward. Ineligible validators get an eligible=false record with a reason and
+// an empty amount (the foundation for invariant V-2: EP=0 -> reward=0).
+message RewardSnapshot {
+  string validator_address = 1 [(gogoproto.customname) = "ValidatorAddress"];
+  uint64 epoch_id = 2;
+  // amount is the minted coins string (e.g. "1000000scn"), empty when not eligible.
+  string amount = 3;
+  bool eligible = 4;
+  // reason explains the eligibility decision ("eligible", "not active",
+  // "non-compliant", "EP=0", or "disabled").
+  string reason = 5;
+}

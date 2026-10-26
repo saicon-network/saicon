@@ -1,0 +1,85 @@
+syntax = "proto3";
+package chain.participation.v1;
+
+import "amino/amino.proto";
+import "chain/participation/v1/params.proto";
+import "chain/participation/v1/types.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/participation/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  // Parameters queries the parameters of the module.
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/saicon/chain/participation/v1/params";
+  }
+
+  // Ep queries the accumulated Empirical Points for a single validator.
+  rpc Ep(QueryEpRequest) returns (QueryEpResponse) {
+    option (google.api.http).get = "/saicon/chain/participation/v1/ep/{validator_address}";
+  }
+
+  // Snapshot queries the Participation Score snapshot for a validator at a
+  // given epoch.
+  rpc Snapshot(QuerySnapshotRequest) returns (QuerySnapshotResponse) {
+    option (google.api.http).get = "/saicon/chain/participation/v1/snapshot/{validator_address}/{epoch_id}";
+  }
+
+  // SnapshotRange queries Participation Score snapshots for a validator across a
+  // closed epoch range. Epochs with no record are omitted rather than returned
+  // empty — a missing epoch means the validator was not processed then, which is
+  // different from a zero score.
+  rpc SnapshotRange(QuerySnapshotRangeRequest) returns (QuerySnapshotRangeResponse) {
+    option (google.api.http).get = "/saicon/chain/participation/v1/snapshots/{validator_address}/{from_epoch}/{to_epoch}";
+  }
+}
+
+// QueryEpRequest is the request for Query/Ep.
+message QueryEpRequest {
+  string validator_address = 1;
+}
+
+// QueryEpResponse is the response for Query/Ep.
+message QueryEpResponse {
+  EmpiricalPointsState ep = 1 [(gogoproto.nullable) = false];
+}
+
+// QuerySnapshotRequest is the request for Query/Snapshot.
+message QuerySnapshotRequest {
+  string validator_address = 1;
+  uint64 epoch_id = 2;
+}
+
+// QuerySnapshotResponse is the response for Query/Snapshot.
+message QuerySnapshotResponse {
+  ParticipationScoreSnapshot snapshot = 1 [(gogoproto.nullable) = false];
+}
+
+// QuerySnapshotRangeRequest is the request for Query/SnapshotRange. The range is
+// inclusive on both ends and capped, because an unbounded range is a free way to
+// make a node do unbounded work.
+message QuerySnapshotRangeRequest {
+  string validator_address = 1;
+  uint64 from_epoch = 2;
+  uint64 to_epoch = 3;
+}
+
+// QuerySnapshotRangeResponse is the response for Query/SnapshotRange.
+message QuerySnapshotRangeResponse {
+  repeated ParticipationScoreSnapshot snapshots = 1 [(gogoproto.nullable) = false];
+}
+
+// QueryParamsRequest is request type for the Query/Params RPC method.
+message QueryParamsRequest {}
+
+// QueryParamsResponse is response type for the Query/Params RPC method.
+message QueryParamsResponse {
+  // params holds all the parameters of this module.
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
