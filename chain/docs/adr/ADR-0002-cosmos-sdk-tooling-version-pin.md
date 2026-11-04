@@ -14,6 +14,10 @@ related: [ADR-0001]
 
 > **Updated 2026-05-31 (WI-D): reconciled Go version to the `go.mod` toolchain (`go 1.25.10`).** `go.mod` is the single source of truth for the Go toolchain — it drives Docker (`golang:1.25-alpine`) and CI (`setup-go` with `go-version-file: chain/go.mod`). The `1.26.3` referenced in the original WI-001 record was only the developer's locally-installed Go at scaffold time; Go 1.26.3 is backward-compatible and builds a `go 1.25` module fine, but it is **not** the declared toolchain.
 
+> **Updated 2026-10-28: the SDK pin is v0.53.8, with CometBFT v0.38.25 and ibc-go v10.7.0** —
+> [ADR-0016](ADR-0016-cosmos-sdk-0-53-8-patch.md), applied by the `v0.10.0` upgrade. The Ignite and
+> Go pins below are unchanged.
+
 ## Context
 
 [ADR-0001](ADR-0001-use-cosmos-sdk.md) recorded the choice of Cosmos SDK as the foundation. While executing WI-001 (Bootstrap Cosmos SDK scaffold) we need to pin the **exact versions** of the SDK, the scaffold tool and the Go runtime, so that:

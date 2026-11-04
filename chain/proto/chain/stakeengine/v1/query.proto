@@ -31,6 +31,10 @@ service Query {
   rpc DelegatorQueue(QueryDelegatorQueueRequest) returns (QueryDelegatorQueueResponse) {
     option (google.api.http).get = "/saicon/chain/stakeengine/v1/delegators/{delegator_address}/queue";
   }
+  // EntityStake is an attested entity's aggregate stake against its cap.
+  rpc EntityStake(QueryEntityStakeRequest) returns (QueryEntityStakeResponse) {
+    option (google.api.http).get = "/saicon/chain/stakeengine/v1/entities/{entity_id}/stake";
+  }
 }
 
 message QueryParamsRequest {}
@@ -127,4 +131,32 @@ message QueryDelegatorQueueResponse {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
+}
+
+message QueryEntityStakeRequest {
+  string entity_id = 1;
+}
+
+message QueryEntityStakeResponse {
+  // tokens is the sum of the entity's members' tokens, every bond status.
+  string tokens = 1 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  string entity_cap = 2 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // room is entity_cap - tokens; negative for an entity above its cap.
+  string room = 3 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  uint32 active_seats = 4;
+  uint32 max_active_seats = 5;
+  bool frozen = 6;
+  string reason = 7;
 }

@@ -1,0 +1,80 @@
+syntax = "proto3";
+package chain.randomness.v1;
+
+import "amino/amino.proto";
+import "chain/randomness/v1/params.proto";
+import "chain/randomness/v1/types.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/randomness/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/saicon/chain/randomness/v1/params";
+  }
+  // Round shows the current round with its pool and submissions.
+  rpc Round(QueryRoundRequest) returns (QueryRoundResponse) {
+    option (google.api.http).get = "/saicon/chain/randomness/v1/round";
+  }
+  // Draw shows the record of one closed round.
+  rpc Draw(QueryDrawRequest) returns (QueryDrawResponse) {
+    option (google.api.http).get = "/saicon/chain/randomness/v1/draws/{round}";
+  }
+  // Draws lists the stored records; pagination.reverse gives newest first.
+  rpc Draws(QueryDrawsRequest) returns (QueryDrawsResponse) {
+    option (google.api.http).get = "/saicon/chain/randomness/v1/draws";
+  }
+  // LatestDraw shows the newest record and the newest DRAWN record. The path
+  // is not draws/latest: that would collide with draws/{round} in the gateway.
+  rpc LatestDraw(QueryLatestDrawRequest) returns (QueryLatestDrawResponse) {
+    option (google.api.http).get = "/saicon/chain/randomness/v1/latest-draw";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message QueryRoundRequest {}
+
+message QueryRoundResponse {
+  Round round = 1 [(gogoproto.nullable) = false];
+  repeated PoolEntry pool = 2 [(gogoproto.nullable) = false];
+  repeated Submission submissions = 3 [(gogoproto.nullable) = false];
+  // required is the quorum for the pool: ceil(2 * pool / 3).
+  uint32 required = 4;
+}
+
+message QueryDrawRequest {
+  uint64 round = 1;
+}
+
+message QueryDrawResponse {
+  Draw draw = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryDrawsRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryDrawsResponse {
+  repeated Draw draws = 1 [(gogoproto.nullable) = false];
+  cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+message QueryLatestDrawRequest {}
+
+message QueryLatestDrawResponse {
+  // latest is the newest record, DRAWN or SKIPPED; null before the first round closes.
+  Draw latest = 1;
+  // latest_drawn is the newest DRAWN record; null when no round has been drawn.
+  Draw latest_drawn = 2;
+}

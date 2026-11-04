@@ -23,10 +23,11 @@ type CapsKeeper interface {
 	DelegatorSlots(ctx context.Context, delegator sdk.AccAddress) ([]string, error)
 	MaxValidatorsPerDelegator(ctx context.Context) (uint32, error)
 	MinDelegation(ctx context.Context) (math.Int, error)
+	EntityStanding(ctx context.Context, val sdk.ValAddress) (types.EntityStanding, error)
 }
 
-// CapsDecorator enforces the entry floor, the global cap and the per-validator
-// cap on staking messages (ADR-0012, spec §7). It recurses into authz.MsgExec
+// CapsDecorator enforces the entry floor, the global cap, the per-validator cap
+// and the entity aggregate cap on staking messages (ADR-0012, spec §7). It recurses into authz.MsgExec
 // and fails closed beyond maxAuthzDepth, like the V-3 lock-up decorator.
 type CapsDecorator struct{ k CapsKeeper }
 
@@ -41,11 +42,12 @@ func (d CapsDecorator) AnteHandle(ctx sdk.Context, tx sdk.Tx, simulate bool, nex
 		return next(ctx, tx, simulate)
 	}
 	c := &checker{
-		k:         d.k,
-		ctx:       ctx,
-		added:     map[string]math.Int{},
-		withdrawn: map[string]math.Int{},
-		newSlots:  map[string]map[string]bool{},
+		k:           d.k,
+		ctx:         ctx,
+		added:       map[string]math.Int{},
+		entityAdded: map[string]math.Int{},
+		withdrawn:   map[string]math.Int{},
+		newSlots:    map[string]map[string]bool{},
 	}
 	if err := c.check(tx.GetMsgs(), 0); err != nil {
 		return ctx, err
@@ -65,6 +67,8 @@ type checker struct {
 
 	added     map[string]math.Int // valoper → tokens this tx adds to it
 	withdrawn map[string]math.Int // valoper → self-bond this tx takes out of it
+
+	entityAdded map[string]math.Int // entity id → tokens this tx adds to its members
 
 	newSlots map[string]map[string]bool // delegator → validators this tx adds
 }
@@ -154,7 +158,7 @@ func (c *checker) createValidator(msg *stakingtypes.MsgCreateValidator) error {
 		return errorsmod.Wrapf(types.ErrGlobalCapReached,
 			"a new validator's %s nscn exceeds the %s nscn of headroom under the global cap", msg.Value.Amount, c.headroom)
 	}
-	if err := c.fitsValidator(va, msg.Value.Amount); err != nil {
+	if err := c.fitsValidator(va, msg.Value.Amount, false); err != nil {
 		return err
 	}
 	c.headroom = c.headroom.Sub(msg.Value.Amount)
@@ -231,7 +235,7 @@ func (c *checker) newStake(validator string, amount sdk.Coin) error {
 			"%s nscn exceeds the %s nscn of headroom under the global cap; join the stake queue with "+
 				"MsgEnqueueDelegation (saicond tx stakeengine enqueue)", amount.Amount, c.headroom)
 	}
-	if err := c.fitsValidator(va, amount.Amount); err != nil {
+	if err := c.fitsValidator(va, amount.Amount, false); err != nil {
 		return err
 	}
 	c.headroom = c.headroom.Sub(amount.Amount)
@@ -252,12 +256,39 @@ func (c *checker) redelegate(msg *stakingtypes.MsgBeginRedelegate) error {
 	if err := c.load(); err != nil {
 		return err
 	}
-	return c.fitsValidator(dst, msg.Amount.Amount)
+	// A redelegation inside one entity moves stake within it: not entity growth.
+	src, err := sdk.ValAddressFromBech32(msg.ValidatorSrcAddress)
+	if err != nil {
+		return c.fitsValidator(dst, msg.Amount.Amount, false)
+	}
+	same, err := c.sameEntity(src, dst)
+	if err != nil {
+		return err
+	}
+	return c.fitsValidator(dst, msg.Amount.Amount, same)
 }
 
-// fitsValidator checks val against the per-validator cap, counting what earlier
-// messages in this tx already add to it, and records the addition.
-func (c *checker) fitsValidator(val sdk.ValAddress, amount math.Int) error {
+// sameEntity is true when both validators belong to one attested entity.
+func (c *checker) sameEntity(a, b sdk.ValAddress) (bool, error) {
+	sa, err := c.k.EntityStanding(c.ctx, a)
+	if err != nil {
+		return false, err
+	}
+	if sa.EntityID == "" {
+		return false, nil
+	}
+	sb, err := c.k.EntityStanding(c.ctx, b)
+	if err != nil {
+		return false, err
+	}
+	return sa.EntityID == sb.EntityID, nil
+}
+
+// fitsValidator checks val against the per-validator cap and, unless skipEntity,
+// against its entity's standing and aggregate cap, counting what earlier messages
+// in this tx already add to each, and records the addition. skipEntity is set
+// for a redelegation inside one entity, which moves stake within the entity.
+func (c *checker) fitsValidator(val sdk.ValAddress, amount math.Int, skipEntity bool) error {
 	tokens, err := c.k.ValidatorTokens(c.ctx, val)
 	if err != nil {
 		return err
@@ -268,6 +299,23 @@ func (c *checker) fitsValidator(val sdk.ValAddress, amount math.Int) error {
 		return errorsmod.Wrapf(types.ErrValidatorCapReached,
 			"validator %s would hold %s nscn; the per-validator cap is %s nscn; "+
 				"use MsgDelegateRouted (saicond tx delegationrouter delegate) to spread it", key, after, c.vcap)
+	}
+	if !skipEntity {
+		s, err := c.k.EntityStanding(c.ctx, val)
+		if err != nil {
+			return err
+		}
+		before, after := math.ZeroInt(), amount
+		if s.EntityID != "" {
+			before = s.Tokens.Add(get(c.entityAdded, s.EntityID))
+			after = before.Add(amount)
+		}
+		if err := types.CheckEntityGrowth(s, before, after); err != nil {
+			return err
+		}
+		if s.EntityID != "" {
+			c.entityAdded[s.EntityID] = after.Sub(s.Tokens)
+		}
 	}
 	c.added[key] = get(c.added, key).Add(amount)
 	return nil

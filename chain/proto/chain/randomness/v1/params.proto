@@ -1,0 +1,24 @@
+syntax = "proto3";
+package chain.randomness.v1;
+
+import "amino/amino.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/randomness/types";
+
+// Params of the randomness module (spec §13). Both change the next round, never
+// one already scheduled.
+message Params {
+  option (amino.name) = "chain/x/randomness/Params";
+  option (gogoproto.equal) = true;
+
+  // rotation_epochs is how many x/participation epochs lie between two rounds;
+  // a rotation falls on a multiple of epoch_length_blocks * rotation_epochs.
+  // Default 7. Tier 2 (ADR-0013): bound [1, 28].
+  uint32 rotation_epochs = 1;
+
+  // window_blocks is how many blocks before the rotation height submissions
+  // are accepted. Default 100 (the DevNet's one epoch). Tier 2 (ADR-0013):
+  // bound [10, 200000].
+  uint64 window_blocks = 2;
+}

@@ -3,6 +3,7 @@ package keeper_test
 import (
 	"testing"
 
+	"cosmossdk.io/math"
 	"github.com/stretchr/testify/require"
 
 	"github.com/saicon-network/saicon/chain/x/compliance/keeper"
@@ -36,12 +37,13 @@ func TestMsgUpdateParams(t *testing.T) {
 			expErrMsg: "invalid authority",
 		},
 		{
-			name: "send enabled param",
+			name: "zero params are refused",
 			input: &types.MsgUpdateParams{
 				Authority: authorityStr,
 				Params:    types.Params{},
 			},
-			expErr: false,
+			expErr:    true,
+			expErrMsg: "coordinated-attack fraction out of bounds",
 		},
 		{
 			name: "all good",
@@ -65,4 +67,30 @@ func TestMsgUpdateParams(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUpdateParamsRefusesAFractionBelowTheChainsDoubleSignFraction(t *testing.T) {
+	f := initFixture(t)
+	f.slashing.d = math.LegacyNewDecWithPrec(35, 2)
+	ms := keeper.NewMsgServerImpl(f.keeper)
+
+	authorityStr, err := f.addressCodec.BytesToString(f.keeper.GetAuthority())
+	require.NoError(t, err)
+	before, err := f.keeper.Params.Get(f.ctx)
+	require.NoError(t, err)
+
+	below := types.DefaultParams() // 0.30 < 0.35
+	_, err = ms.UpdateParams(f.ctx, &types.MsgUpdateParams{Authority: authorityStr, Params: below})
+	require.ErrorIs(t, err, types.ErrInvalidFraction)
+	after, err := f.keeper.Params.Get(f.ctx)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "a refused update changes nothing")
+
+	equal := types.DefaultParams()
+	equal.CoordinatedAttackFraction = math.LegacyNewDecWithPrec(35, 2)
+	_, err = ms.UpdateParams(f.ctx, &types.MsgUpdateParams{Authority: authorityStr, Params: equal})
+	require.NoError(t, err)
+	after, err = f.keeper.Params.Get(f.ctx)
+	require.NoError(t, err)
+	require.Equal(t, "0.350000000000000000", after.CoordinatedAttackFraction.String())
 }

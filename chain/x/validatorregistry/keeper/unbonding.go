@@ -50,8 +50,12 @@ func (k Keeper) BeginUnbonding(ctx context.Context, valAddr sdk.ValAddress) erro
 	// leaves the bonded set (voluntary unbond, downtime jail, or simply dropping out
 	// by power), writing a FUTURE completion instant onto an INACTIVE record makes
 	// UnstakeCooldownInvariant panic in the same EndBlock — a network-wide,
-	// deterministic, restart-surviving halt. BONDING cannot legitimately be leaving
-	// a bonded set either, so it gets the same treatment.
+	// deterministic, restart-surviving halt. BONDING can be leaving a bonded set
+	// since S8 — a validator the entity registry held while x/staking bonded it —
+	// and still records nothing: it never held an active seat, x/staking's own
+	// unbonding period still applies to its stake, and CompleteExit's
+	// BONDING -> INACTIVE edge needs no recorded timing (V-5 skips a zero
+	// completion instant).
 	switch md.Status {
 	case types.Status_STATUS_INACTIVE, types.Status_STATUS_BONDING:
 		return nil
@@ -65,7 +69,13 @@ func (k Keeper) BeginUnbonding(ctx context.Context, valAddr sdk.ValAddress) erro
 	// and QUARANTINED land in UNBONDING, and the compliance mirror cannot stand in
 	// for the difference — it is hardcoded true on two write paths and its V-4.1
 	// invariant is not enforced. See ActivateOnBond.
-	md.PreUnbondingStatus = md.Status
+	//
+	// A validator already UNBONDING keeps the status it recorded on its first
+	// exit: it is one the entity registry held when it re-bonded (spec §7.1), and
+	// overwriting the record with UNBONDING would resume it QUARANTINED.
+	if md.Status != types.Status_STATUS_UNBONDING {
+		md.PreUnbondingStatus = md.Status
+	}
 
 	if err := k.SetValidatorMetadata(ctx, valAddr, md); err != nil {
 		return err

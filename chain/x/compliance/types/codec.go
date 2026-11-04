@@ -11,6 +11,7 @@ func RegisterInterfaces(registrar codectypes.InterfaceRegistry) {
 		&MsgUpdateParams{},
 		&MsgSubmitEvidence{},
 		&MsgClearFlag{},
+		&MsgFireCoordinatedSanction{},
 	)
 	msgservice.RegisterMsgServiceDesc(registrar, &_Msg_serviceDesc)
 }

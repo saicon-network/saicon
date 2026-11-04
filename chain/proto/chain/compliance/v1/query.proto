@@ -5,6 +5,7 @@ import "amino/amino.proto";
 import "chain/compliance/v1/params.proto";
 import "chain/compliance/v1/types.proto";
 import "cosmos/base/query/v1beta1/pagination.proto";
+import "cosmos_proto/cosmos.proto";
 import "gogoproto/gogo.proto";
 import "google/api/annotations.proto";
 
@@ -20,6 +21,44 @@ service Query {
   // Compliance returns the compliance state of a single validator.
   rpc Compliance(QueryComplianceRequest) returns (QueryComplianceResponse) {
     option (google.api.http).get = "/saicon/chain/compliance/v1/compliance/{validator_address}";
+  }
+
+  // Offence returns one recorded equivocation by its evidence hash.
+  rpc Offence(QueryOffenceRequest) returns (QueryOffenceResponse) {
+    option (google.api.http).get = "/saicon/chain/compliance/v1/offences/{evidence_hash}";
+  }
+
+  // Offences pages through every recorded equivocation in hash order.
+  rpc Offences(QueryOffencesRequest) returns (QueryOffencesResponse) {
+    option (google.api.http).get = "/saicon/chain/compliance/v1/offences";
+  }
+
+  // Case returns one entity's case: its linked offences, whether it is armed
+  // and which offences no sanction has fired yet.
+  rpc Case(QueryCaseRequest) returns (QueryCaseResponse) {
+    option (google.api.http).get = "/saicon/chain/compliance/v1/cases/{entity_id}";
+  }
+
+  // ArmedCases lists every armed entity with at least one unfired offence,
+  // sorted by entity id.
+  rpc ArmedCases(QueryArmedCasesRequest) returns (QueryArmedCasesResponse) {
+    option (google.api.http).get = "/saicon/chain/compliance/v1/armed";
+  }
+
+  // Sanction returns one executed coordinated-attack sanction by id.
+  rpc Sanction(QuerySanctionRequest) returns (QuerySanctionResponse) {
+    option (google.api.http).get = "/saicon/chain/compliance/v1/sanctions/{id}";
+  }
+
+  // Sanctions pages through every executed sanction in id order.
+  rpc Sanctions(QuerySanctionsRequest) returns (QuerySanctionsResponse) {
+    option (google.api.http).get = "/saicon/chain/compliance/v1/sanctions";
+  }
+
+  // SanctionPreview runs the planning function of MsgFireCoordinatedSanction
+  // on the current state and writes nothing.
+  rpc SanctionPreview(QuerySanctionPreviewRequest) returns (QuerySanctionPreviewResponse) {
+    option (google.api.http).get = "/saicon/chain/compliance/v1/sanction-preview";
   }
 }
 
@@ -43,6 +82,100 @@ message QueryComplianceRequest {
 // QueryComplianceResponse is response type for the Query/Compliance RPC method.
 message QueryComplianceResponse {
   ComplianceState state = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// QueryOffenceRequest is request type for the Query/Offence RPC method.
+message QueryOffenceRequest {
+  // evidence_hash is 64 uppercase hex.
+  string evidence_hash = 1;
+}
+
+// QueryOffenceResponse is response type for the Query/Offence RPC method.
+message QueryOffenceResponse {
+  Offence offence = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// QueryOffencesRequest is request type for the Query/Offences RPC method.
+message QueryOffencesRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+// QueryOffencesResponse is response type for the Query/Offences RPC method.
+message QueryOffencesResponse {
+  repeated Offence offences = 1 [(gogoproto.nullable) = false];
+  cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+// QueryCaseRequest is request type for the Query/Case RPC method.
+message QueryCaseRequest {
+  string entity_id = 1;
+}
+
+// QueryCaseResponse is response type for the Query/Case RPC method.
+message QueryCaseResponse {
+  CoordinatedCase case = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// QueryArmedCasesRequest is request type for the Query/ArmedCases RPC method.
+message QueryArmedCasesRequest {}
+
+// QueryArmedCasesResponse is response type for the Query/ArmedCases RPC method.
+message QueryArmedCasesResponse {
+  repeated CoordinatedCase cases = 1 [(gogoproto.nullable) = false];
+}
+
+// QuerySanctionRequest is request type for the Query/Sanction RPC method.
+message QuerySanctionRequest {
+  uint64 id = 1;
+}
+
+// QuerySanctionResponse is response type for the Query/Sanction RPC method.
+message QuerySanctionResponse {
+  Sanction sanction = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// QuerySanctionsRequest is request type for the Query/Sanctions RPC method.
+message QuerySanctionsRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+// QuerySanctionsResponse is response type for the Query/Sanctions RPC method.
+message QuerySanctionsResponse {
+  repeated Sanction sanctions = 1 [(gogoproto.nullable) = false];
+  cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+// QuerySanctionPreviewRequest is request type for the Query/SanctionPreview RPC method.
+message QuerySanctionPreviewRequest {
+  // entity_id is the entity the sanction would be fired against.
+  string entity_id = 1;
+  // evidence_hashes are the offences to fire, 64 uppercase hex each.
+  repeated string evidence_hashes = 2;
+  // fraction is F as a decimal string; parsed by the handler so that a
+  // malformed value is an InvalidArgument error.
+  string fraction = 3 [(cosmos_proto.scalar) = "cosmos.Dec"];
+}
+
+// QuerySanctionPreviewResponse is response type for the Query/SanctionPreview RPC method.
+message QuerySanctionPreviewResponse {
+  // fireable is true when a firing right now would pass every check.
+  bool fireable = 1;
+  // reason is the planning error's text when fireable is false.
+  string reason = 2;
+  // plan is what the firing would do; empty when fireable is false.
+  SanctionPlan plan = 3 [
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];

@@ -2,6 +2,7 @@ syntax = "proto3";
 package chain.compliance.v1;
 
 import "amino/amino.proto";
+import "cosmos_proto/cosmos.proto";
 import "gogoproto/gogo.proto";
 
 option go_package = "github.com/saicon-network/saicon/chain/x/compliance/types";
@@ -15,4 +16,22 @@ message Params {
   // remain JAILED before a governed MsgUnjail is accepted (measured from
   // last_status_change_height). Gov-tunable via MsgUpdateParams.
   int64 unjail_cooldown_blocks = 1;
+
+  // coordinated_attack_fraction is the TOTAL share of a double-signer's stake at
+  // the infraction height that a coordinated-attack sanction burns; the sanction
+  // burns this minus the double-sign fraction already applied (spec §8.2).
+  // Default 0.30. Bound [0.10, 1.00], and not below the chain's current
+  // slash_fraction_double_sign (checked in MsgUpdateParams and in the sanction
+  // plan). The bounds are Go code (tier 2, ADR-0013), not parameters.
+  string coordinated_attack_fraction = 2 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+
+  // appeal_window_seconds is the time after an entity is armed before a
+  // coordinated-attack sanction may execute (spec §7.4). Default 604800 (7 days).
+  // Bound [86400, 1209600] (1 to 14 days); the bounds are Go code (tier 2,
+  // ADR-0013), not parameters.
+  uint64 appeal_window_seconds = 3;
 }

@@ -1,6 +1,7 @@
 package types
 
 import (
+	"errors"
 	"fmt"
 
 	"cosmossdk.io/math"
@@ -24,6 +25,12 @@ func EntryFloor() math.Int { return math.NewInt(EntryFloorNscn) }
 // value and a tighter bound are an owner review item before testnet.
 const maxValidatorCapFloorNscn int64 = 2_100_000 * scn
 
+// maxEntityCapFloorNscn bounds entity_cap_floor: 5,250,000 SCN, 25% of max
+// supply. A floor this large disables the 5% entity rule in practice; the
+// production value and a tighter bound are an owner review item before
+// testnet, like the validator floor.
+const maxEntityCapFloorNscn int64 = 5_250_000 * scn
+
 // MinDelegationDefault is the Register's minimum delegation: 100 SCN (v1
 // carry-over, DEVELOPMENT.md §2.8).
 func MinDelegationDefault() math.Int { return math.NewInt(100 * scn) }
@@ -44,6 +51,8 @@ func DefaultParams() Params {
 		PublicCirculatingFraction: math.LegacyNewDecWithPrec(60, 2),
 		ValidatorCapFraction:      math.LegacyNewDecWithPrec(2, 2),
 		ValidatorCapFloor:         math.ZeroInt(),
+		EntityCapFraction:         math.LegacyNewDecWithPrec(5, 2),
+		EntityCapFloor:            math.ZeroInt(),
 		EwmaWindowEpochs:          30,
 		MinQueueEntry:             MinDelegationDefault(),
 		MaxQueueEntries:           10_000,
@@ -95,6 +104,20 @@ func (p Params) Validate() error {
 	}
 	if p.MinDelegation.IsNil() || p.MinDelegation.LT(math.NewInt(scn)) || p.MinDelegation.GT(math.NewInt(maxMinDelegationNscn)) {
 		return fmt.Errorf("min_delegation must be within [%d, %d] nscn (1 – 10,000 SCN), got %s", scn, maxMinDelegationNscn, p.MinDelegation)
+	}
+	if p.EntityCapFraction.IsNil() {
+		return errors.New("entity_cap_fraction is not set")
+	}
+	if p.EntityCapFraction.LT(math.LegacyNewDecWithPrec(2, 2)) || p.EntityCapFraction.GT(math.LegacyNewDecWithPrec(10, 2)) {
+		return fmt.Errorf("entity_cap_fraction must be within [0.02, 0.10], got %s", p.EntityCapFraction)
+	}
+	if p.EntityCapFraction.LT(p.ValidatorCapFraction) {
+		return fmt.Errorf("entity_cap_fraction %s must not be below validator_cap_fraction %s", p.EntityCapFraction, p.ValidatorCapFraction)
+	}
+	if p.EntityCapFloor.IsNil() || p.EntityCapFloor.LT(p.ValidatorCapFloor) ||
+		p.EntityCapFloor.GT(math.NewInt(maxEntityCapFloorNscn)) {
+		return fmt.Errorf("entity_cap_floor must be within [validator_cap_floor %s, %d] nscn, got %s",
+			p.ValidatorCapFloor, maxEntityCapFloorNscn, p.EntityCapFloor)
 	}
 	if len(p.ExcludedAddresses) > 100 {
 		return fmt.Errorf("excluded_addresses holds at most 100 entries, got %d", len(p.ExcludedAddresses))

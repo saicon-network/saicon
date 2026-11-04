@@ -11,6 +11,7 @@ import (
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
+	entityregistrykeeper "github.com/saicon-network/saicon/chain/x/entityregistry/keeper"
 	participationkeeper "github.com/saicon-network/saicon/chain/x/participation/keeper"
 	"github.com/saicon-network/saicon/chain/x/stakeengine/keeper"
 	"github.com/saicon-network/saicon/chain/x/stakeengine/types"
@@ -47,6 +48,7 @@ type ModuleInputs struct {
 	StakingKeeper           *stakingkeeper.Keeper
 	ParticipationKeeper     participationkeeper.Keeper
 	ValidatorregistryKeeper validatorregistrykeeper.Keeper
+	EntityregistryKeeper    entityregistrykeeper.Keeper
 }
 
 type ModuleOutputs struct {
@@ -75,6 +77,7 @@ func ProvideModule(in ModuleInputs) ModuleOutputs {
 		in.StakingKeeper,
 		in.ParticipationKeeper,
 		in.ValidatorregistryKeeper,
+		in.EntityregistryKeeper,
 	)
 	return ModuleOutputs{
 		StakeengineKeeper: k,

@@ -1,0 +1,99 @@
+syntax = "proto3";
+package chain.randomness.v1;
+
+import "cosmos_proto/cosmos.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/randomness/types";
+
+// RoundStatus is the live state of the current round. The zero value is never
+// written and is refused by genesis validation and invariant V-14.
+enum RoundStatus {
+  ROUND_STATUS_UNSPECIFIED = 0;
+  // ROUND_STATUS_SCHEDULED: the round exists; its window has not opened, so it
+  // has no pool.
+  ROUND_STATUS_SCHEDULED = 1;
+  // ROUND_STATUS_OPEN: the pool is snapshotted and submissions are accepted
+  // while window_open_height <= height < rotation_height.
+  ROUND_STATUS_OPEN = 2;
+}
+
+// DrawOutcome is how a closed round ended. The zero value is never written and
+// is refused by genesis validation.
+enum DrawOutcome {
+  DRAW_OUTCOME_UNSPECIFIED = 0;
+  // DRAW_OUTCOME_DRAWN: the quorum was met and the shadow draw was made.
+  DRAW_OUTCOME_DRAWN = 1;
+  // DRAW_OUTCOME_SKIPPED: no draw; skip_reason says why.
+  DRAW_OUTCOME_SKIPPED = 2;
+}
+
+// Round is the current round (spec §7). Rounds are numbered from 1.
+message Round {
+  // number is the round number, at least 1.
+  uint64 number = 1;
+  // input is input_N, 64 lowercase hex characters (32 bytes): the seed of the
+  // previous round, or the genesis initial input for round 1.
+  string input = 2;
+  // key_cutoff_height: a key bound at or after this height is not eligible
+  // for this round (spec §7.4). 0 for round 1.
+  int64 key_cutoff_height = 3;
+  // window_open_height is O_N; 0 while the round is not scheduled.
+  int64 window_open_height = 4;
+  // rotation_height is R_N; 0 while the round is not scheduled.
+  int64 rotation_height = 5;
+  RoundStatus status = 6;
+}
+
+// PoolEntry is one entity in the pool snapshot, with its designated submitter.
+message PoolEntry {
+  string entity_id = 1;
+  // validator is the designated submitter (spec §7.4); empty when no member of
+  // the entity holds an eligible key.
+  string validator = 2 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  // vrf_public_key is the designated submitter's key copied at the snapshot,
+  // 64 lowercase hex characters; empty exactly when validator is empty.
+  string vrf_public_key = 3;
+}
+
+// Submission is a verified VRF output for the current round (spec §8).
+message Submission {
+  string entity_id = 1;
+  string validator = 2 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  // output is the VRF output, 128 lowercase hex characters (64 bytes).
+  string output = 3;
+  // proof is the ECVRF proof, 160 lowercase hex characters (80 bytes).
+  string proof = 4;
+  // height is the block height of the submission.
+  int64 height = 5;
+}
+
+// Draw is the record of a closed round (spec §11.2). With pool, outputs and
+// input in the record, seed and winners can be recomputed from state alone.
+message Draw {
+  uint64 round = 1;
+  DrawOutcome outcome = 2;
+  // input is input_N, 64 lowercase hex characters.
+  string input = 3;
+  // seed is seed_N, 64 lowercase hex characters; computed for every round.
+  string seed = 4;
+  int64 window_open_height = 5;
+  int64 rotation_height = 6;
+  // pool holds the entity ids of the pool snapshot, sorted ascending.
+  repeated string pool = 7;
+  // keyed is how many pool entries had a designated submitter.
+  uint32 keyed = 8;
+  // outputs holds the verified outputs, 128 lowercase hex characters each,
+  // sorted ascending.
+  repeated string outputs = 9;
+  // submitted is the number of submissions.
+  uint32 submitted = 10;
+  // required is the quorum for the pool size: ceil(2 * pool / 3).
+  uint32 required = 11;
+  // winners holds the drawn entity ids in draw order; empty when SKIPPED.
+  repeated string winners = 12;
+  // skip_reason is empty when DRAWN.
+  string skip_reason = 13;
+  // cohort_round is the round whose winners stand after this one; 0 when no
+  // round has been drawn.
+  uint64 cohort_round = 14;
+}

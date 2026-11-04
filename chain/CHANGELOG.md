@@ -5,8 +5,206 @@ reports its version via `git describe`.
 
 ## Unreleased
 
+## v0.10.0 — 2026-10-29
+
+A new module, `x/entityregistry`, a second, `x/randomness` (per-validator VRF randomness in shadow
+mode), and the chain's first upgrade handler. **State-breaking**, applied by the `v0.10.0` upgrade
+handler at a halt height: the DevNet is upgraded in place, with no reset. Both modules, the VRF
+key fields and the coordinated-attack sanction (`x/compliance` consensus version 2) arrive in the
+same `v0.10.0` upgrade.
+
+### Added
+
+- **The entity registry (`x/entityregistry`).** A validator now has to belong to an *attested
+  entity* before it can earn. An operator asks an attestor to attest the entity — an id, a display
+  name, the SHA-256 of an off-chain attestation document and one to eight validators — with
+  `MsgAttestEntity` (or the governance authority does); until then the validator can bond and sign
+  blocks, but stays `STATUS_BONDING`, with no score, no Empirical Points and no rewards, and is
+  promoted at the end of the block in which it is attested. Three limits apply per entity: at most
+  **2 active seats** (`max_active_seats`, bound 1-3), an aggregate stake cap of **5%** of the same
+  EWMA-30 base as the validator cap (`entity_cap_fraction`, bound 2-10%, and `entity_cap_floor`)
+  enforced on every path that adds stake — transaction, governance, group, authz, the queue and
+  the router — and **one lottery ticket** per attested entity. An entity over a limit, or one
+  whose attestation is revoked, is frozen: it takes no new stake and its validators cannot
+  re-activate, but nothing is demoted or force-unbonded. `MsgRevokeEntity` withdraws an
+  attestation. The attestors are a governed list in the module's params.
+  Queries: `saicond q entityregistry {params, entities, entity, validator-entity, tickets}` and
+  `saicond q stakeengine entity-stake`; messages: `saicond tx entityregistry {attest, revoke}`.
+  Invariant V-12 halts the chain if an ACTIVE validator is neither attested nor recorded as a
+  frozen seat; V-13 reports an entity above its limits. The gate decides the participation
+  active set — scoring, rewards, routed and queued stake — and not CometBFT's voting set, which
+  stays x/staking's top 75 by stake until the selection layer (S10).
+- **The first upgrade handler, `v0.10.0`.** Adds the `entityregistry` store, migrates
+  `x/stakeengine` to consensus version 2 and attests every currently ACTIVE validator as its own
+  one-member entity, so no earning validator loses its seat. The attestors for the new list are
+  read from the upgrade plan's `info` (`{"attestors":["saicon1…"]}`). Rehearsed from the v0.9.1
+  binary by `./scripts/rehearse-upgrade-v0.10.0.sh`; the runbook is
+  the devnet operations runbook.
+- **A localnet demo**, `./scripts/demo-entityregistry.sh`, and a genesis attestation in the DevNet
+  and testnet genesis scripts.
+- **A per-validator VRF key, offered by the operator and bound in the attestation.** An operator
+  runs `saicond vrf keygen --output <file>` (a separate secret from the consensus key and the
+  operator key, mode 0600, never overwritten), then
+  `saicond tx entityregistry offer-vrf-key --vrf-key-file <file> --from <operator>`, which sends
+  `MsgOfferVrfKey` with a proof of possession bound to the chain id, the validator and the key. The
+  attestor binds the offered key with `saicond tx entityregistry attest … --vrf-keys '{"validator":
+  "saiconvaloper1…","vrf_public_key":"…"}'`; a key the operator did not offer is refused, and a key
+  belongs to one validator for the chain's lifetime. The operator then runs the submitter
+  (`./scripts/vrf-submit-loop.sh`, which calls `saicond tx randomness submit-vrf` every 30 s) so the
+  entity's output is in each round. Query: `saicond q entityregistry vrf-key <saiconvaloper…>`;
+  `x/entityregistry` errors 1107-1110 (`ErrInvalidVrfKey`, `ErrVrfKeyInUse`, `ErrVrfKeyNotOffered`,
+  `ErrInvalidProofOfPossession`); events `vrf_key_offered` and `vrf_key_bound`.
+  ECVRF-EDWARDS25519-SHA512-ELL2 (RFC 9381), checked against the RFC's Appendix B.4 vectors.
+- **`x/randomness`, VRF randomness in shadow mode (ADR-0008 option (c), B11).** A round falls on the
+  participation epoch grid every `rotation_epochs` (7) epochs and takes submissions in the
+  `window_blocks` (100) blocks before it. The pool is the attested entities with an ACTIVE member
+  inside the entity cap, each with one designated submitter; `MsgSubmitVrf` carries an 80-byte proof,
+  verified on-chain (2,000 gas) against the key in the round's snapshot. The seed is chained
+  from round to round and computed every round; a 2/3 quorum is needed for a draw, otherwise the
+  round is skipped with a reason and the previous cohort stands. On quorum a draw of `min(22, pool)`
+  entities is stored and published. **The draw awards no seats and nothing reads it**; the chain's
+  validator set, the PoP active set, stake, EP and rewards do not depend on it, and not submitting
+  costs nothing. Queries: `saicond q randomness {params, round, draw <round>, draws, latest-draw}`
+  (REST under `/saicon/chain/randomness/v1/`); transaction: `saicond tx randomness submit-vrf
+  --vrf-key-file <file> --from <operator>`, which prints the reason and exits 0 when there is
+  nothing to do; events `randomness_round_scheduled`, `randomness_window_opened`,
+  `vrf_output_submitted`, `randomness_seed_computed`, `randomness_shadow_draw`,
+  `randomness_draw_skipped`; parameters `rotation_epochs` [1, 28] and `window_blocks`
+  [10, 200,000] (`MsgUpdateParams`, governance); `x/randomness` errors 1100-1106. Invariant V-14 is checked at
+  every rotation and never halts: a break skips that round's draw. The module leaves a bounded
+  residual (one bit per late submitter, amplified by coalitions; censorship by a window block's
+  proposer; key grinding right after the upgrade) described in ADR-0008 and DEVELOPMENT.md §1.4.
+  Gas, measured: `MsgSubmitVrf` 53,172, `MsgOfferVrfKey` 60,671, `MsgAttestEntity` 71,477 with one
+  key and 165,833 with eight. Clients submit from the second block of the window: a `--gas auto`
+  simulation in the block before it is refused, and the loop retries.
+- **The coordinated-attack sanction (`x/compliance`, ADR-0010 §3, project decision D-S8-2).** A third
+  slash tier, fired by governance and armed only by evidence. Every duplicate-vote equivocation that
+  `x/evidence` accepts is recorded under its evidence hash (64 uppercase hex) with the entity the
+  validator belonged to at the infraction height; an entity is **armed** when offences of two or more
+  distinct validators are linked to it. A governance proposal carrying `MsgFireCoordinatedSanction`
+  (`entity_id`, `evidence_hashes`, `fraction`, `reason`; the signer is the gov module account, there
+  is no transaction command) fires it once the appeal window has passed (default 7 days, counted from
+  the later of the arming and the latest named offence): each named double-signer's **total** burn becomes
+  `coordinated_attack_fraction` of its stake at the infraction height, unbonding and redelegation
+  entries included, so the sanction burns the fraction minus what `x/evidence` already burned. The
+  validator stays JAILED and tombstoned, its compliance record takes the new event 6, and its
+  reputation is zeroed best-effort; EP is never touched. Only the incarnation that committed the
+  offence is slashed or classified: a target whose validator x/staking removed after the offence (a
+  validator re-created on the old consensus key included, which the new `AfterValidatorRemoved` hook
+  records) or whose key another operator holds is `NOT_SLASHABLE` and not classified, and a target
+  whose operator has no `x/validatorregistry` record is slashed and not classified; each target's
+  `classification` records which. The chain does not detect, prove or infer
+  coordination: it records equivocations and registry linkage, and the vote ratifies. Two validators
+  of different entities that double-sign together arm nothing, and neither does a lone double-sign.
+  Operators and voters see it through `saicond q compliance {armed, case <entity>, offence <hash>,
+  offences, sanction <id>, sanctions, sanction-preview <entity> <fraction> <hash>...}` (REST under
+  `/saicon/chain/compliance/v1/`): `armed` lists the entities with an unfired offence, and
+  `sanction-preview` runs the firing's own planning function and reports `fireable`, the reason, each
+  target's extra fraction and outcome (`SLASHED`, `NOTHING_TO_ADD`, `NOT_SLASHABLE`), the earliest
+  execution time and the unbonding deadline. A proposal that is not fireable at its end fails with the
+  registered error and writes nothing (`x/compliance` errors 1109-1120). Events
+  `coordinated_offence_recorded`, `coordinated_entity_armed`, `coordinated_sanction_fired` and
+  `coordinated_sanction_target`. Invariant V-15 is checked at every firing and preview and never
+  halts: a break refuses the firing. Gas, measured: recording one offence 26,857 (one that does not
+  arm: the arming check and event are not in it); the firing handler
+  226,232 with two targets and 321,616 with three; `sanction-preview` 39,766; `MsgSubmitProposal`
+  carrying a firing with two hashes 173,848. Limits: only the named double-signers are slashed;
+  coordination without equivocation is out of reach (ADR-0014 D4); 30% is an uncalibrated default; a
+  sanction must execute within about 21 days of each target's evidence (x/staking cannot slash a fully
+  unbonded validator); nothing before `v0.10.0` is back-filled; the rule cannot arm on a one-validator
+  chain, and an offence arms only inside the consensus evidence window (DEVELOPMENT.md §4 item 7a).
+- **`x/entityregistry` keeps a membership history**: a member row carries the height the validator
+  joined its entity (`joined_height`, field 6), and a departure row keeps, per validator, the last
+  entity it left, when, and whether its seat stayed frozen and charged to it. Both are in genesis.
+  The attestation made by the upgrade sets `joined_height` to the upgrade height.
+- **`saicond vrf {keygen, show}`**, and two localnet scripts: `./scripts/demo-randomness.sh` (a key
+  ceremony, a drawn round, a skipped round with the submitter stopped, a drawn round again) and the
+  VRF key ceremony in `./scripts/rehearse-upgrade-v0.10.0.sh` (`SKIP_VRF=1` keeps the earlier path).
+  The DevNet and testnet genesis scripts bind a VRF key per validator and draw a random initial
+  input.
+- **The decentralization panel (indexer and scoreboard).** At each epoch's last block the indexer
+  reads the consensus validator set and the entity registry at that height and stores the top-10
+  voting-power share, the Nakamoto coefficient by validator and by attested entity, and the two
+  concentration curves, computed with exact integers from the voting powers it stores beside them.
+  New endpoints `/v1/concentration`, `/v1/concentration/epochs` and `/v1/entities` (each entity's
+  stake against its cap and seats against the limit, frozen seats included). The scoreboard draws
+  them with the 35% reference line and the published stress-test results to compare against; the
+  methodology is a docs page on the site. The indexer also stops on a reset that keeps the chain
+  id, by re-reading the block hash of the newest measured epoch. Spec
+  the design notes.
+
 ### Changed
 
+- **`MsgAttestEntity` gains field 6, `vrf_keys`** (validator and offered key); **`Member` gains
+  fields 4-5**, `vrf_public_key` and `vrf_key_height`; the entity-registry genesis gains the key
+  offers and the key owners. An attestation that does not name a staying member's key leaves it and
+  its height as they were. The upgrade attests the existing validators without keys, so every
+  entity is keyless until its operator offers a key and an attestor re-attests with it.
+- **Cosmos SDK v0.53.8, CometBFT v0.38.25, ibc-go v10.7.0** (from v0.53.6, v0.38.21, v10.4.0),
+  the upstream-labelled security patch (upstream publishes no advisory) inside the same release
+  family, applied by the same `v0.10.0` upgrade (ADR-0016). State-breaking upstream: malformed
+  signatures and signer infos are refused instead of panicking, a missing historical-rewards
+  record is an error instead of a zero payout, an out-of-transaction reward withdrawal to a
+  blocked address falls back to the owner and then the community pool, and interchain-account
+  packets get stricter validation. CometBFT
+  rejects a block timed 60 s or more ahead of the node's clock (`block_time_tolerance`, new in
+  `config.toml` with `event_bus_buffer_capacity`; an older `config.toml` takes the defaults).
+  **Operators: keep the host clock in sync (NTP).** A new event, `withdraw_addr_redirected`,
+  marks a withdrawal that fell back to the owner or the community pool. No `cosmossdk.io` module,
+  store or migration changes.
+- **The slashing fractions are in the binary: double-sign 10%, downtime 0** (ADR-0010, owner
+  decisions of 2026-07-28 and 2026-10-28). Until now only the two genesis scripts set them; a
+  chain made by plain `saicond init` and the in-process test harness ran the SDK's 5% and 1%. The
+  app's default genesis now carries both values, and `app/sim_params.json` pins them for the
+  simulations, which draw their own slashing genesis. The `v0.10.0` upgrade raises a stored
+  double-sign fraction below 10% to 10% (a higher value stays) and sets a positive downtime
+  fraction to 0, because x/compliance reads any positive burn as a double-sign. The DevNet already
+  runs both values from its genesis template, so the upgrade changes nothing there.
+- **The evidence window is the unbonding period** (project decision 2026-10-29, DEVELOPMENT.md §4
+  item 7a). The `v0.10.0` upgrade sets the `x/consensus` evidence limits to `max_age_duration` = the
+  staking unbonding time U and `max_age_num_blocks` = floor(U / 6 s): 302,400 blocks and 1,814,400 s
+  for 21 days. CometBFT and `x/evidence` expire evidence only when both limits are passed, so the window
+  is exactly U while the average block interval over a U-long span, halts included, is at most 6 s (the
+  DevNet measures 5.01 s, which absorbs about 3.5 days of halt in 21 days), and longer only
+  otherwise. The DevNet's stock 100,000 blocks / 48 h (about 5.8 days) is raised; a larger stored
+  window is capped, because evidence older than U could reach a validator re-created on the key; one
+  already at the target is left alone. Evidence `max_bytes` and the other consensus groups are kept
+  byte for byte, and the result is validated as `x/consensus` validates a `MsgUpdateParams`. The genesis
+  templates now use the same rule (302,400 blocks instead of 362,880, and the same `min-retain-blocks`),
+  and so does `./scripts/gov-evidence-window.sh`: it reads the unbonding time from the chain, reports a
+  window shorter (GAP) or longer (EXCESS) than unbonding, says "ok, nothing to propose" on a chain at
+  the rule, and its governance proposal never sets a limit above the rule. It also measures the window
+  in force now (the age of the oldest block the block limit still protects) and reports `EXCESS NOW`
+  with exit 1 when a halt has stretched it past unbonding, even with the limits at the rule; when that
+  window cannot be measured it says so and exits 3 rather than passing.
+- **`x/compliance` parameters gain fields 2-3**, `coordinated_attack_fraction` (default 0.30, bound
+  [0.10, 1.00], and not below the chain's `slash_fraction_double_sign`) and `appeal_window_seconds`
+  (default 604,800, bound [86,400, 1,209,600]); the module is at **consensus version 2** and its genesis
+  gains the offences, the sanctions, the next sanction id and the removed consensus keys. The `v0.10.0`
+  upgrade migrates it: the cooldown is kept, the two new values take their defaults, and the fraction
+  is then lifted to the double-sign fraction in force if that is higher. The new collections live in
+  the existing store.
+- **A new compliance event, 6 (`COMPLIANCE_EVENT_TYPE_COORDINATED_ATTACK`)**, written only by the
+  sanction. `MsgSubmitEvidence` refuses it (`ErrInvalidEvent`), and the status transition treats it as
+  JAILED, like `CRITICAL_VIOLATION`.
+- **The double-sign hook stays silent inside a sanction's own slash.** x/staking calls
+  `BeforeValidatorSlashed` again during it; the hook is told by a context marker to return, so the
+  burn is recorded as event 6 and not as a second double-sign.
+- **`github.com/oasisprotocol/curve25519-voi` is a direct dependency** (the same version, already
+  linked through CometBFT; BSD 3-Clause), used by `chain/crypto/vrf`. No module is added.
+- **Activation is gated.** Activation on bond, `MsgClearFlag`, `MsgUnjail` and the resume after
+  an aborted exit now ask the registry. `MsgClearFlag` and `MsgUnjail` fail for a validator
+  without an attestation (`ErrActivationHeld`, code 1107). Auto-created and genesis validators
+  become ACTIVE only with an attested entity (ADR-0004, superseded in part; ADR-0014 accepted for D1-D3).
+- **`x/stakeengine` consensus version 2**, with two new parameters: `entity_cap_fraction`
+  (default 0.05) and `entity_cap_floor`; the migration sets them from the validator values.
+  New errors: `ErrEntityCapReached` (1114) and `ErrEntityFrozen` (1115).
+- **The router honours entity room.** One leg per entity; a frozen validator receives nothing
+  (ADR-0005).
+- **Gas.** `create-validator` uses 203,389 gas (197,780 on v0.9.1), so the 200,000 default
+  fails; a delegation into an entity uses 178,814 gas for a one-member entity (about 10% under
+  the 200,000 default) and 202,600 for an 8-member entity, which exceeds it, so clients should
+  send `--gas 600000` or `--gas auto --gas-adjustment 1.5`.
 - **Lint is clean and blocking.** golangci-lint finds nothing in `chain/` or `indexer/`;
   unchecked `Close` errors, redundant assignments, unused code and simplifiable selectors
   are fixed, and the remaining uses of APIs the SDK marks deprecated but v0.53 still needs

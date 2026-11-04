@@ -2,9 +2,13 @@ package keeper_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"cosmossdk.io/core/address"
+	errorsmod "cosmossdk.io/errors"
+	"cosmossdk.io/math"
 	storetypes "cosmossdk.io/store/types"
 	addresscodec "github.com/cosmos/cosmos-sdk/codec/address"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
@@ -54,10 +58,106 @@ func (m *mockVRKeeper) GetValidatorMetadata(_ context.Context, addr sdk.ValAddre
 	}, true, nil
 }
 
-// mockStakingKeeper returns a validator with a fixed consensus pubkey.
+// mockStakingKeeper returns a validator with a fixed consensus pubkey, resolves
+// validators by consensus address from byCons, and can be made to fail that
+// lookup for chosen consensus addresses.
 type mockStakingKeeper struct {
 	val   stakingtypes.Validator
 	found bool
+
+	// byCons maps a consensus address (string of the raw bytes) to its validator.
+	byCons map[string]stakingtypes.Validator
+	// failCons lists consensus addresses whose GetValidatorByConsAddr errors.
+	failCons map[string]bool
+	consCdc  address.Codec
+
+	// slashes records every SlashWithInfractionReason call, in order.
+	slashes []slashCall
+	// slashFn, when set, answers a slash call (it may return an error, call the
+	// hooks, or read the window); the default burns nothing.
+	slashFn func(ctx context.Context, call slashCall) (math.Int, error)
+}
+
+// slashCall is one SlashWithInfractionReason call as x/staking receives it.
+type slashCall struct {
+	cons       []byte
+	height     int64
+	power      int64
+	fraction   math.LegacyDec
+	infraction stakingtypes.Infraction
+}
+
+func (m *mockStakingKeeper) GetValidatorByConsAddr(_ context.Context, consAddr sdk.ConsAddress) (stakingtypes.Validator, error) {
+	if m.failCons[string(consAddr)] {
+		return stakingtypes.Validator{}, errors.New("staking: injected lookup failure")
+	}
+	v, ok := m.byCons[string(consAddr)]
+	if !ok {
+		return stakingtypes.Validator{}, stakingtypes.ErrNoValidatorFound
+	}
+	return v, nil
+}
+
+func (m *mockStakingKeeper) SlashWithInfractionReason(ctx context.Context, consAddr sdk.ConsAddress, height, power int64,
+	fraction math.LegacyDec, infraction stakingtypes.Infraction) (math.Int, error) {
+	call := slashCall{cons: consAddr, height: height, power: power, fraction: fraction, infraction: infraction}
+	m.slashes = append(m.slashes, call)
+	if m.slashFn != nil {
+		return m.slashFn(ctx, call)
+	}
+	return math.ZeroInt(), nil
+}
+
+func (m *mockStakingKeeper) ConsensusAddressCodec() address.Codec { return m.consCdc }
+
+func (m *mockStakingKeeper) TokensFromConsensusPower(_ context.Context, power int64) math.Int {
+	return sdk.TokensFromConsensusPower(power, sdk.DefaultPowerReduction)
+}
+
+// mockEvidence is x/evidence's store as the compliance keeper reads it: the
+// hashes (raw bytes as a string) it accepted.
+type mockEvidence struct {
+	hashes map[string]bool
+}
+
+func (m *mockEvidence) HasEquivocation(_ context.Context, hash []byte) (bool, error) {
+	return m.hashes[string(hash)], nil
+}
+
+// mockEntities is the entity registry as the compliance keeper reads it: the
+// entity of a validator at a height, by (operator, height); calls counts the
+// EntityAt lookups.
+type mockEntities struct {
+	at    map[string]string
+	calls int
+	// absent lists entity ids HasEntity denies; every other id exists.
+	absent map[string]bool
+}
+
+func (m *mockEntities) EntityAt(_ context.Context, val sdk.ValAddress, height int64) (string, bool, error) {
+	m.calls++
+	id, ok := m.at[entityKey(val, height)]
+	return id, ok, nil
+}
+
+func (m *mockEntities) HasEntity(_ context.Context, id string) (bool, error) {
+	return !m.absent[id], nil
+}
+
+func entityKey(val sdk.ValAddress, height int64) string {
+	return fmt.Sprintf("%s@%d", val.String(), height)
+}
+
+// mockWindow records the slash window calls; closeErr makes the close fail.
+type mockWindow struct {
+	opened, closed int
+	closeErr       error
+}
+
+func (m *mockWindow) OpenBeginBlockWindow(_ context.Context) error { m.opened++; return nil }
+func (m *mockWindow) CloseBeginBlockWindow(_ context.Context) error {
+	m.closed++
+	return m.closeErr
 }
 
 func (m *mockStakingKeeper) GetValidator(_ context.Context, _ sdk.ValAddress) (stakingtypes.Validator, error) {
@@ -67,10 +167,32 @@ func (m *mockStakingKeeper) GetValidator(_ context.Context, _ sdk.ValAddress) (s
 	return m.val, nil
 }
 
-// mockSlashingKeeper reports a configurable tombstone state.
-type mockSlashingKeeper struct{ tombstoned bool }
+// mockSlashingKeeper reports a configurable tombstone state and the chain's
+// double-sign fraction d (the harness default is 0.10).
+type mockSlashingKeeper struct {
+	tombstoned bool
+	d          math.LegacyDec
 
-func (m *mockSlashingKeeper) IsTombstoned(_ context.Context, _ sdk.ConsAddress) bool {
+	// calls counts IsTombstoned calls; with falseAfter > 0 the answer turns false
+	// once calls exceeds it (a state that V-15 passes and the plan then disputes).
+	calls      int
+	falseAfter int
+	// notTombstoned lists consensus addresses that are never tombstoned.
+	notTombstoned map[string]bool
+}
+
+func (m *mockSlashingKeeper) SlashFractionDoubleSign(_ context.Context) (math.LegacyDec, error) {
+	return m.d, nil
+}
+
+func (m *mockSlashingKeeper) IsTombstoned(_ context.Context, consAddr sdk.ConsAddress) bool {
+	m.calls++
+	if m.notTombstoned[string(consAddr)] {
+		return false
+	}
+	if m.falseAfter > 0 && m.calls > m.falseAfter {
+		return false
+	}
 	return m.tombstoned
 }
 
@@ -84,9 +206,14 @@ func testValidator(t *testing.T) stakingtypes.Validator {
 	return stakingtypes.Validator{ConsensusPubkey: pkAny}
 }
 
+// SetComplianceFlag fails for a validator without a record, as the registry's
+// own SetComplianceFlag does.
 func (m *mockVRKeeper) SetComplianceFlag(_ context.Context, addr sdk.ValAddress, compliant bool) error {
 	if m.err != nil {
 		return m.err
+	}
+	if _, ok := m.statuses[addr.String()]; !ok {
+		return errorsmod.Wrapf(vrtypes.ErrValidatorNotFound, "validator %s", addr.String())
 	}
 	m.flags[addr.String()] = compliant
 	return nil
@@ -142,6 +269,9 @@ type fixture struct {
 	staking       *mockStakingKeeper
 	slashing      *mockSlashingKeeper
 	participation *mockParticipationKeeper
+	evidence      *mockEvidence
+	entities      *mockEntities
+	window        *mockWindow
 }
 
 func initFixture(t *testing.T) *fixture {
@@ -157,8 +287,17 @@ func initFixture(t *testing.T) *fixture {
 	authority := authtypes.NewModuleAddress(types.GovModuleName)
 
 	vr := newMockVRKeeper()
-	stakingK := &mockStakingKeeper{found: true, val: testValidator(t)}
-	slashingK := &mockSlashingKeeper{}
+	stakingK := &mockStakingKeeper{
+		found:    true,
+		val:      testValidator(t),
+		byCons:   map[string]stakingtypes.Validator{},
+		failCons: map[string]bool{},
+		consCdc:  addresscodec.NewBech32Codec(sdk.GetConfig().GetBech32ConsensusAddrPrefix()),
+	}
+	evidenceK := &mockEvidence{hashes: map[string]bool{}}
+	entitiesK := &mockEntities{at: map[string]string{}}
+	windowK := &mockWindow{}
+	slashingK := &mockSlashingKeeper{d: math.LegacyNewDecWithPrec(10, 2)}
 	participationK := &mockParticipationKeeper{zeroed: map[string]bool{}}
 
 	k := keeper.NewKeeper(
@@ -170,6 +309,9 @@ func initFixture(t *testing.T) *fixture {
 		stakingK,
 		slashingK,
 		participationK,
+		evidenceK,
+		entitiesK,
+		windowK,
 	)
 
 	// Initialize params
@@ -185,5 +327,8 @@ func initFixture(t *testing.T) *fixture {
 		staking:       stakingK,
 		slashing:      slashingK,
 		participation: participationK,
+		evidence:      evidenceK,
+		entities:      entitiesK,
+		window:        windowK,
 	}
 }

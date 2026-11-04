@@ -22,6 +22,13 @@ func (k msgServer) SubmitEvidence(ctx context.Context, req *types.MsgSubmitEvide
 		return nil, errorsmod.Wrapf(types.ErrInvalidEvent, "SubmitEvidence requires a non-compliance event, got %s", req.Event)
 	}
 
+	// Event 6 is the coordinated-attack sanction's own classification: only
+	// MsgFireCoordinatedSanction writes it, after the evidence and the plan
+	// that the event stands for (spec §8.5).
+	if req.Event == types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_COORDINATED_ATTACK {
+		return nil, errorsmod.Wrapf(types.ErrInvalidEvent, "%s is written only by MsgFireCoordinatedSanction", req.Event)
+	}
+
 	valAddr, err := parseValAddr(req.ValidatorAddress)
 	if err != nil {
 		return nil, errorsmod.Wrap(types.ErrInvalidValidator, err.Error())

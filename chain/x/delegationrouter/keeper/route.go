@@ -43,12 +43,23 @@ func (k Keeper) Plan(ctx context.Context, delegator sdk.AccAddress, primary sdk.
 	if err != nil {
 		return route, err
 	}
-	room := func(v sdk.ValAddress) (math.Int, math.Int, error) {
+	// room is a validator's tokens, the room a leg may take (the smaller of
+	// the validator's and its entity's, zero when frozen) and its entity id.
+	// Standings are memoised for the call: a candidate is read once.
+	standings := map[string]setypes.EntityStanding{}
+	room := func(v sdk.ValAddress) (math.Int, math.Int, string, error) {
 		tok, err := k.stakeEngine.ValidatorTokens(ctx, v)
 		if err != nil {
-			return math.Int{}, math.Int{}, err
+			return math.Int{}, math.Int{}, "", err
 		}
-		return tok, math.MaxInt(math.ZeroInt(), vcap.Sub(tok)), nil
+		s, ok := standings[string(v)]
+		if !ok {
+			if s, err = k.stakeEngine.EntityStanding(ctx, v); err != nil {
+				return math.Int{}, math.Int{}, "", err
+			}
+			standings[string(v)] = s
+		}
+		return tok, s.RoomFor(math.MaxInt(math.ZeroInt(), vcap.Sub(tok))), s.EntityID, nil
 	}
 
 	slots, err := k.stakeEngine.DelegatorSlots(ctx, delegator)
@@ -63,7 +74,7 @@ func (k Keeper) Plan(ctx context.Context, delegator sdk.AccAddress, primary sdk.
 	for _, s := range slots {
 		held[s] = true
 	}
-	_, pRoom, err := room(primary)
+	_, pRoom, pEntity, err := room(primary)
 	if err != nil {
 		return route, err
 	}
@@ -90,7 +101,7 @@ func (k Keeper) Plan(ctx context.Context, delegator sdk.AccAddress, primary sdk.
 		if err != nil {
 			return route, err
 		}
-		cands, err := k.candidates(ctx, delegator, primary, params, room)
+		cands, err := k.candidates(ctx, delegator, primary, pEntity, params, room)
 		if err != nil {
 			return route, err
 		}
@@ -147,10 +158,13 @@ func (k Keeper) eligibleValidator(ctx context.Context, addr sdk.ValAddress, v st
 
 // candidates lists the validators the router may send overflow to, in the
 // by-power order of x/staking (bounded by max_validators, deterministic): not
-// the primary or the delegator's own validator, eligible, with room, scored at least min_route_score in the last
-// closed epoch, and allowed by the entity cap.
-func (k Keeper) candidates(ctx context.Context, delegator sdk.AccAddress, primary sdk.ValAddress, params types.Params,
-	room func(sdk.ValAddress) (math.Int, math.Int, error)) ([]types.Candidate, error) {
+// the primary or the delegator's own validator, eligible, scored at least
+// min_route_score in the last closed epoch, and with room, where room is the
+// smaller of the validator's and its entity's and is zero for a frozen
+// validator. A validator in the primary's entity is skipped (its entity room
+// is shared with the primary); Choose later keeps one candidate per entity.
+func (k Keeper) candidates(ctx context.Context, delegator sdk.AccAddress, primary sdk.ValAddress, primaryEntity string,
+	params types.Params, room func(sdk.ValAddress) (math.Int, math.Int, string, error)) ([]types.Candidate, error) {
 	epoch, err := k.stakeEngine.LatestEpoch(ctx)
 	if err != nil {
 		return nil, err
@@ -175,11 +189,14 @@ func (k Keeper) candidates(ctx context.Context, delegator sdk.AccAddress, primar
 		if !ok {
 			continue
 		}
-		tokens, r, err := room(addr)
+		tokens, r, entity, err := room(addr)
 		if err != nil {
 			return nil, err
 		}
 		if !r.IsPositive() {
+			continue
+		}
+		if entity != "" && entity == primaryEntity {
 			continue
 		}
 		snap, found, err := k.participationKeeper.GetSnapshot(ctx, epoch, addr)
@@ -189,17 +206,10 @@ func (k Keeper) candidates(ctx context.Context, delegator sdk.AccAddress, primar
 		if !found || snap.ComputedScore.IsNil() || snap.ComputedScore.LT(params.MinRouteScore) {
 			continue
 		}
-		if !k.entityAllows(ctx, addr) {
-			continue
-		}
 		out = append(out, types.Candidate{
 			Operator: v.OperatorAddress, OperatorBytes: addr,
-			Score: snap.ComputedScore, Tokens: tokens, Room: r,
+			Score: snap.ComputedScore, Tokens: tokens, Room: r, Entity: entity,
 		})
 	}
 	return out, nil
 }
-
-// entityAllows is the entity-cap filter of spec §4.2. Always true until S8's
-// entity registry gives it a body; it is a function so S8 changes nothing else.
-func (k Keeper) entityAllows(context.Context, sdk.ValAddress) bool { return true }

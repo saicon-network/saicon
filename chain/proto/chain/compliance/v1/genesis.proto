@@ -29,4 +29,27 @@ message GenesisState {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
+
+  // offences is every recorded offence, ordered by evidence hash bytes (spec §10).
+  // The by-entity index is rebuilt from it on import.
+  repeated Offence offences = 3 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // sanctions is every executed sanction, ordered by id.
+  repeated Sanction sanctions = 4 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+
+  // next_sanction_id is the id the next sanction gets. 0 reads as 1: proto3
+  // omits a zero and a hand-written genesis may leave it out. Validate requires
+  // it, so read, to be above every sanction id.
+  uint64 next_sanction_id = 5;
+
+  // removed_consensus_addresses is every tombstoned consensus address whose
+  // validator x/staking removed, bech32, ordered by address bytes. An offence on
+  // one of them is never slashed or classified again (spec §8.3).
+  repeated string removed_consensus_addresses = 6;
 }

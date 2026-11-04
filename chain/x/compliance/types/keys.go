@@ -30,3 +30,20 @@ var ComplianceStateKey = collections.NewPrefix("cs_compliance")
 // band is empty — downtime carries a zero stake slash and double-sign is 0.10 —
 // so BeforeValidatorSlashed now treats any positive burn as a double-sign,
 // which x/staking makes exact by never invoking the hook on a zero burn.
+
+// OffencesKey is the prefix of the Offences map: evidence hash (32 bytes) -> Offence.
+var OffencesKey = collections.NewPrefix("of_compliance")
+
+// OffencesByEntityKey is the prefix of the by-entity index: (entity_id, hash) -> nothing,
+// for duplicate-vote offences linked to an entity only.
+var OffencesByEntityKey = collections.NewPrefix("oe_compliance")
+
+// SanctionsKey is the prefix of the Sanctions map: id -> Sanction.
+var SanctionsKey = collections.NewPrefix("sn_compliance")
+
+// SanctionSeqKey is the prefix of the sanction id sequence; the first id is 1.
+var SanctionSeqKey = collections.NewPrefix("sq_compliance")
+
+// RemovedConsensusKey is the prefix of the set of tombstoned consensus addresses
+// whose validator x/staking removed: consensus address bytes -> nothing.
+var RemovedConsensusKey = collections.NewPrefix("rc_compliance")

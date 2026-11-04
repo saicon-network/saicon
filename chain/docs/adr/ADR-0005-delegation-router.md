@@ -5,8 +5,8 @@ the design notes. See
 [DEVELOPMENT.md](../DEVELOPMENT.md) §2.8.
 Related: [ADR-0012](ADR-0012-caps-and-stake-engine.md) (the caps and the queue this
 builds on), [ADR-0004](ADR-0004-validator-activation-model.md) (renumbered the router
-ADR to this number), [ADR-0014](ADR-0014-entity-registry.md) (the entity cap `entityAllows`
-waits for).
+ADR to this number), [ADR-0014](ADR-0014-entity-registry.md) (the entity registry whose
+aggregate cap bounds each leg's room since S8).
 
 ## Context
 
@@ -48,7 +48,9 @@ remainder over at most `max_route_legs` (default 2) other validators. The messag
 `route` preview query call the same function, so a preview never disagrees with execution
 in the same block. A candidate must be registry `STATUS_ACTIVE`, not jailed in staking,
 carry a participation score at or above `min_route_score` (default 0.75, the quarantine
-threshold) in the latest closed epoch, have room, and pass `entityAllows`. Ties break by
+threshold) in the latest closed epoch, have room — the smaller of the validator's room and its entity's, none for a frozen
+validator (S8). At most one candidate per entity becomes a leg, the heaviest, and a validator
+in the primary's entity is skipped because the primary already shares its room. Ties break by
 operator address; shares are `LegacyDec` truncated to nscn, the truncation remainder going
 to the highest-weight leg with room. Neither the primary nor the delegator's own validator
 is a candidate. The primary takes a slot only if it gets a leg, and an overflow leg below
@@ -137,8 +139,9 @@ InitGenesis).
   non-bonded source into a bonded validator is now judged against the global cap.
 - The minimum is not enforced by the hook, so a dust delegation made through governance,
   group or ICA passes. It is not a cap breach; accepted, revisit if abused.
-- `entityAllows` returns true until S8's entity registry gives it a body; nothing else
-  changes then.
+- S8's entity registry gave the router its entity rule: one leg per entity, and a leg's room is
+  bounded by the entity's aggregate room (`entityAllows` is gone; the room function answers it).
+  Nothing else changed.
 - Existing over-concentrated delegations are not rebalanced (B5), and a governance
   decrease of `max_validators_per_delegator` freezes, rather than sheds, delegators already
   above it — the rule ADR-0012 applies to caps.

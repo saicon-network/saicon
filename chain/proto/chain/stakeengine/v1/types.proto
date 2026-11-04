@@ -32,6 +32,12 @@ message CapState {
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
+  // entity_cap is max(entity_cap_fraction x ewma_bonded, entity_cap_floor).
+  string entity_cap = 6 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
 }
 
 // QueueEntry is stake waiting for room under the global cap. Its coins are held
@@ -58,4 +64,9 @@ message HookRecord {
   string self_bond = 3 [(cosmos_proto.scalar) = "cosmos.Int", (gogoproto.customtype) = "cosmossdk.io/math.Int", (gogoproto.nullable) = false];
   bool existed = 4;
   bool is_operator = 5;
+  // delegation_tokens is the delegator's own delegation to the validator, in
+  // tokens, before the operation; recorded only for members of an entity.
+  string delegation_tokens = 6 [(cosmos_proto.scalar) = "cosmos.Int", (gogoproto.customtype) = "cosmossdk.io/math.Int", (gogoproto.nullable) = false];
+  // entity_id is the validator's attested entity, or empty.
+  string entity_id = 7;
 }

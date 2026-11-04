@@ -10,11 +10,13 @@ import (
 
 	"github.com/saicon-network/saicon/chain/x/compliance/keeper"
 	"github.com/saicon-network/saicon/chain/x/compliance/types"
+	vrtypes "github.com/saicon-network/saicon/chain/x/validatorregistry/types"
 )
 
 func TestComplianceQuery_HappyPath(t *testing.T) {
 	f := initFixture(t)
 	addr := sdk.ValAddress([]byte("compliance-query-20b"))[:20]
+	f.vr.statuses[addr.String()] = vrtypes.Status_STATUS_BONDING
 
 	require.NoError(t, f.keeper.SetCompliance(
 		f.ctx, addr, false,

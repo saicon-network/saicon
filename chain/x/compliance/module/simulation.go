@@ -13,10 +13,7 @@ func (AppModule) GenerateGenesisState(simState *module.SimulationState) {
 	for i, acc := range simState.Accounts {
 		accs[i] = acc.Address.String()
 	}
-	complianceGenesis := types.GenesisState{
-		Params: types.DefaultParams(),
-	}
-	simState.GenState[types.ModuleName] = simState.Cdc.MustMarshalJSON(&complianceGenesis)
+	simState.GenState[types.ModuleName] = simState.Cdc.MustMarshalJSON(types.DefaultGenesis())
 }
 
 // RegisterStoreDecoder registers a decoder.

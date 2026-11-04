@@ -23,6 +23,54 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 					Short:          "Query a validator's compliance state (C flag, last event, reason)",
 					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "validator_address"}},
 				},
+				{
+					RpcMethod:      "Offence",
+					Use:            "offence [hash]",
+					Short:          "Query one recorded equivocation by its evidence hash (64 uppercase hex)",
+					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "evidence_hash"}},
+				},
+				{
+					RpcMethod: "Offences",
+					Use:       "offences",
+					Short:     "List every recorded equivocation in evidence-hash order",
+				},
+				{
+					RpcMethod:      "Case",
+					Use:            "case [entity-id]",
+					Short:          "Query an entity's case: its linked offences, whether it is armed, and which are unfired",
+					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "entity_id"}},
+				},
+				{
+					RpcMethod: "ArmedCases",
+					Use:       "armed",
+					Short:     "List every armed entity with at least one unfired offence",
+				},
+				{
+					RpcMethod:      "Sanction",
+					Use:            "sanction [id]",
+					Short:          "Query one executed coordinated-attack sanction",
+					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "id"}},
+				},
+				{
+					RpcMethod: "Sanctions",
+					Use:       "sanctions",
+					Short:     "List every executed coordinated-attack sanction",
+				},
+				{
+					RpcMethod: "SanctionPreview",
+					Use:       "sanction-preview [entity-id] [fraction] [hash]...",
+					Short:     "Preview what a coordinated-attack sanction would do right now (writes nothing)",
+					Long: "Runs the same planning function as the firing on the current state and reports whether the " +
+						"firing would pass, with the targets, the extra fraction per target, the earliest execution " +
+						"time and the unbonding deadline. It does not fire anything. A sanction is fired only by a " +
+						"governance proposal: submit one with `saicond tx gov submit-proposal` carrying a " +
+						"MsgFireCoordinatedSanction that names these hashes.",
+					PositionalArgs: []*autocliv1.PositionalArgDescriptor{
+						{ProtoField: "entity_id"},
+						{ProtoField: "fraction"},
+						{ProtoField: "evidence_hashes", Varargs: true},
+					},
+				},
 			},
 		},
 		Tx: &autocliv1.ServiceCommandDescriptor{
@@ -32,6 +80,10 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 				{
 					RpcMethod: "UpdateParams",
 					Skip:      true, // skipped because authority gated
+				},
+				{
+					RpcMethod: "FireCoordinatedSanction",
+					Skip:      true, // gov proposals only (spec §11)
 				},
 				{
 					RpcMethod: "SubmitEvidence",

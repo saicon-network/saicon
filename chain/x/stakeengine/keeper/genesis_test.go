@@ -3,6 +3,8 @@ package keeper_test
 import (
 	"testing"
 
+	"cosmossdk.io/math"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/saicon-network/saicon/chain/x/stakeengine/types"
@@ -86,4 +88,40 @@ func TestGenesis_ImportRebuildsTheQueueIndex(t *testing.T) {
 	require.Equal(t, uint64(1), b.indexCount(t, acc(9), val(1)))
 	require.Equal(t, uint64(2), b.indexCount(t, acc(9), val(2)))
 	b.requireV10(t)
+}
+
+func TestInitGenesis_AMissingEntityCapIsBackfilled(t *testing.T) {
+	for name, entityCap := range map[string]math.Int{"zero": math.ZeroInt(), "absent": {}} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			gs := types.DefaultGenesis()
+			gs.CapState = &types.CapState{
+				Epoch:             3,
+				PublicCirculating: nscn(5_000_000),
+				GlobalCap:         nscn(1_680_000),
+				EwmaBonded:        math.LegacyNewDecFromInt(nscn(900_000)),
+				ValidatorCap:      nscn(18_000),
+				EntityCap:         entityCap,
+			}
+			require.NoError(t, f.k.InitGenesis(f.ctx, *gs))
+			st, err := f.k.CapState.Get(f.ctx)
+			require.NoError(t, err)
+			require.Equal(t, types.EntityCap(gs.Params, gs.CapState.EwmaBonded), st.EntityCap)
+			require.Equal(t, nscn(45_000), st.EntityCap)
+			require.Equal(t, uint64(3), st.Epoch)
+		})
+	}
+}
+
+func TestInitGenesis_AnEntityCapIsKept(t *testing.T) {
+	f := newFixture(t)
+	gs := types.DefaultGenesis()
+	gs.CapState = &types.CapState{
+		PublicCirculating: nscn(5_000_000), GlobalCap: nscn(1_680_000),
+		EwmaBonded: math.LegacyNewDecFromInt(nscn(900_000)), ValidatorCap: nscn(18_000), EntityCap: nscn(123),
+	}
+	require.NoError(t, f.k.InitGenesis(f.ctx, *gs))
+	st, err := f.k.CapState.Get(f.ctx)
+	require.NoError(t, err)
+	require.Equal(t, nscn(123), st.EntityCap)
 }

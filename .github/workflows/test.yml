@@ -25,3 +25,8 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+      # The VRF again on the generic Go backend: curve25519-voi picks AVX2 assembly on
+      # linux/amd64, and purego forces the fallback, so both code paths are tested.
+      - name: Test the VRF on purego
+        if: matrix.module == 'chain'
+        run: go test -tags purego ./crypto/vrf/

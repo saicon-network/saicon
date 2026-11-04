@@ -111,3 +111,28 @@ func TestQueryQueueEntryAndDelegatorQueue(t *testing.T) {
 	_, err = qs.DelegatorQueue(f.ctx, &types.QueryDelegatorQueueRequest{DelegatorAddress: "nonsense"})
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }
+
+func TestQueryEntityStake(t *testing.T) {
+	f := newFixture(t)
+	qs := keeper.NewQueryServerImpl(f.k)
+
+	_, err := qs.EntityStake(f.ctx, &types.QueryEntityStakeRequest{EntityId: "acme"})
+	require.Equal(t, codes.NotFound, status.Code(err), "an entity with no members")
+	_, err = qs.EntityStake(f.ctx, &types.QueryEntityStakeRequest{})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	f.ent.members[string(val(1))] = "acme"
+	f.ent.seats["acme"] = 1
+	_, err = qs.EntityStake(f.ctx, &types.QueryEntityStakeRequest{EntityId: "acme"})
+	require.Equal(t, codes.NotFound, status.Code(err), "before the first cap snapshot")
+
+	f.caps(t)
+	res, err := qs.EntityStake(f.ctx, &types.QueryEntityStakeRequest{EntityId: "acme"})
+	require.NoError(t, err)
+	require.Equal(t, nscn(1_000_000), res.Tokens)
+	require.Equal(t, nscn(50_000), res.EntityCap)
+	require.Equal(t, nscn(-950_000), res.Room, "room is negative above the cap")
+	require.Equal(t, uint32(1), res.ActiveSeats)
+	require.Equal(t, uint32(2), res.MaxActiveSeats)
+	require.False(t, res.Frozen)
+}

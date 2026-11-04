@@ -57,6 +57,12 @@ if [ ! -f "${SAICON_HOME}/config/genesis.json" ]; then
 
   ${SAICOND} genesis add-genesis-account validator "${GENESIS_AMOUNT}" --keyring-backend "${KEYRING}"
 
+  # The devnet's one attestor (project decision D-S8-1). It signs MsgAttestEntity
+  # for every later validator; 1,000 SCN covers its fees. It is a genesis account
+  # so it can sign later, and collect-gentxs validates the genesis it is given.
+  ${SAICOND} keys add attestor --keyring-backend "${KEYRING}" --no-backup
+  ${SAICOND} genesis add-genesis-account attestor 100000000000nscn --keyring-backend "${KEYRING}"
+
   ${SAICOND} genesis gentx validator "${STAKE_AMOUNT}" --chain-id "${CHAIN_ID}" --keyring-backend "${KEYRING}"
 
   ${SAICOND} genesis collect-gentxs
@@ -145,20 +151,26 @@ if [ ! -f "${SAICON_HOME}/config/genesis.json" ]; then
     "${GENESIS_FILE}" > "${GENESIS_FILE}.tmp" && mv "${GENESIS_FILE}.tmp" "${GENESIS_FILE}"
   echo "[entrypoint] stakeengine validator_cap_floor=${STAKEENGINE_CAP_FLOOR} nscn"
 
-  # Evidence window must cover the unbonding period, or a double-signer who is
-  # not reported quickly escapes the slash while their stake is still bonded.
+  # The evidence window is the unbonding period: no shorter, or a double-signer
+  # who is not reported quickly escapes the slash while their stake is still
+  # bonded; no longer, or old evidence can reach a validator re-created on the
+  # key after its unbonding completed (owner 2026-10-29, the v0.10.0 upgrade
+  # applies the same rule: app/upgrades.go evidenceWindow).
   #
   # CometBFT expires evidence only when BOTH limits are passed (evidence/pool.go
-  # isExpired uses &&), so the LONGER of the two governs. The stock defaults are
-  # 100,000 blocks and 48h; at our 5s blocks that is 5.8 days against a 21-day
-  # unbonding period — a 15-day window in which the offence is unpunishable and
-  # the stake has not yet left. Both limits are raised to 21 days.
+  # isExpired uses &&), so the window is max(blocks x block time, duration). The
+  # stock defaults are 100,000 blocks and 48h: 5.8 days at the measured 5.01s
+  # block, against a 21-day unbonding period. Here max_age_duration = 21 days and
+  # max_age_num_blocks = floor(21 days / 6s) = 302,400, so the window is exactly
+  # 21 days while the average block interval over any 21 days, halts included,
+  # is at most 6s (measured: 5.01s, which absorbs ~3.5 days of halt). Slower
+  # blocks or a longer halt make the block limit govern and stretch it.
   #
   # This also sets the floor for block retention: baseapp.GetBlockRetentionHeight
-  # never prunes inside the evidence window, so a validator must keep ~362,880
+  # never prunes inside the evidence window, so a validator must keep ~302,400
   # blocks no matter what min-retain-blocks says.
   UNBONDING_SECONDS=1814400   # 21 days, matches staking unbonding_time (V-5)
-  EVIDENCE_BLOCKS=$(( UNBONDING_SECONDS / 5 ))   # 362,880 at a 5s block
+  EVIDENCE_BLOCKS=$(( UNBONDING_SECONDS / 6 ))   # 302,400: the window stays 21 days at an average block interval up to 6s
   jq --arg n "${EVIDENCE_BLOCKS}" --arg d "${UNBONDING_SECONDS}000000000" \
      '.consensus.params.evidence.max_age_num_blocks = $n
       | .consensus.params.evidence.max_age_duration = $d' \
@@ -201,6 +213,39 @@ if [ ! -f "${SAICON_HOME}/config/genesis.json" ]; then
     echo "[entrypoint] gov voting_period=${GOV_VOTING_PERIOD}"
   fi
 
+  # --- entity registry (S8, ADR-0014) ---------------------------------------
+  # The activation gate admits a validator to ACTIVE only as a member of an
+  # attested entity, and x/entityregistry's genesis runs before the gentx bonds
+  # the validator, so the entity must be in genesis or the validator is held at
+  # BONDING and nothing earns. This runs after the validator_cap_floor line
+  # above so that value is already set when entity_cap_floor copies it.
+  ATTESTOR_ADDR="$(${SAICOND} keys show attestor -a --keyring-backend "${KEYRING}")"
+  VALOPER="$(${SAICOND} keys show validator --bech val -a --keyring-backend "${KEYRING}")"
+  # The hash of a fixed text: there is no off-chain document for the devnet's own operator.
+  ENTITY_HASH="$(printf '%s' 'SAiCoN DevNet operator entity: genesis attestation' | sha256sum | cut -d' ' -f1)"
+  jq --arg att "${ATTESTOR_ADDR}" --arg val "${VALOPER}" --arg h "${ENTITY_HASH}" \
+     '.app_state.entityregistry.params.attestors = [$att]
+      | .app_state.entityregistry.entities = [{"id":"saicon-devnet-operator","display_name":"SAiCoN DevNet operator","attestation_hash":$h,"attestor":$att,"status":"ENTITY_STATUS_ATTESTED","attested_height":"1"}]
+      | .app_state.entityregistry.members = [{"validator":$val,"entity_id":"saicon-devnet-operator","attested_height":"1"}]
+      | .app_state.stakeengine.params.entity_cap_floor = .app_state.stakeengine.params.validator_cap_floor' \
+    "${GENESIS_FILE}" > "${GENESIS_FILE}.tmp" && mv "${GENESIS_FILE}.tmp" "${GENESIS_FILE}"
+  echo "[entrypoint] entityregistry attestor=${ATTESTOR_ADDR}, entity saicon-devnet-operator = ${VALOPER}"
+
+  # --- VRF key (S8 W2, spec §17) --------------------------------------------
+  # The validator's VRF key is bound in genesis; the initial input is drawn
+  # after the key exists, so the key could not have been chosen against it.
+  VRF_KEY_FILE="${SAICON_HOME}/config/vrf_key.json"
+  [ -f "${VRF_KEY_FILE}" ] || ${SAICOND} vrf keygen --output "${VRF_KEY_FILE}" >/dev/null
+  VRF_PK="$(${SAICOND} vrf show --vrf-key-file "${VRF_KEY_FILE}")"
+  INITIAL_INPUT="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+  jq --arg pk "${VRF_PK}" --arg val "${VALOPER}" --arg in "${INITIAL_INPUT}" \
+     '.app_state.entityregistry.members[0].vrf_public_key = $pk
+      | .app_state.entityregistry.members[0].vrf_key_height = "0"
+      | .app_state.entityregistry.vrf_key_owners = [{"vrf_public_key":$pk,"validator":$val}]
+      | .app_state.randomness.initial_input = $in' \
+    "${GENESIS_FILE}" > "${GENESIS_FILE}.tmp" && mv "${GENESIS_FILE}.tmp" "${GENESIS_FILE}"
+  echo "[entrypoint] VRF key ${VRF_PK} bound for ${VALOPER} (${VRF_KEY_FILE})"
+
   ${SAICOND} genesis validate-genesis
 
   # Bind RPC to all interfaces and enable the REST API so the host can reach them.
@@ -233,7 +278,7 @@ fi
 # now on; nothing already stored is deleted retroactively beyond the windows
 # below.
 UNBONDING_SECONDS=1814400                    # 21 days, matches staking unbonding_time (V-5)
-EVIDENCE_BLOCKS=$(( UNBONDING_SECONDS / 5 )) # 362,880 at a 5s block
+EVIDENCE_BLOCKS=$(( UNBONDING_SECONDS / 6 )) # 302,400, the genesis evidence window above
 
 # ── Data retention profile ────────────────────────────────────────────────
 # NODE_PROFILE=validator (default) — keeps what consensus and safety require

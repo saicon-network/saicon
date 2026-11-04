@@ -52,6 +52,8 @@ func (gs GenesisState) Validate() error {
 			{"global_cap", cs.GlobalCap.IsNil() || cs.GlobalCap.IsNegative()},
 			{"validator_cap", cs.ValidatorCap.IsNil() || cs.ValidatorCap.IsNegative()},
 			{"ewma_bonded", cs.EwmaBonded.IsNil() || cs.EwmaBonded.IsNegative()},
+			// entity_cap is backfilled at import when absent or zero (v0.9.x exports).
+			{"entity_cap", !cs.EntityCap.IsNil() && cs.EntityCap.IsNegative()},
 		} {
 			if f.bad {
 				return fmt.Errorf("cap_state.%s must be set and non-negative", f.name)

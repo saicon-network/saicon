@@ -9,19 +9,29 @@ package chain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
 type RPC struct {
-	base string
-	c    *http.Client
+	base  string
+	c     *http.Client
+	calls *countingTransport
 }
 
 func NewRPC(baseURL string) *RPC {
-	return &RPC{base: baseURL, c: &http.Client{Timeout: 20 * time.Second}}
+	c, ct := newCountingClient()
+	return &RPC{base: baseURL, c: c, calls: ct}
 }
+
+// Calls is the number of HTTP requests this client has sent.
+func (r *RPC) Calls() uint64 { return r.calls.n.Load() }
 
 type Status struct {
 	ChainID      string
@@ -99,4 +109,143 @@ func (r *RPC) Tip(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	return s.LatestHeight, nil
+}
+
+// SetMember is one validator of the CometBFT set at a height.
+type SetMember struct {
+	Address     string // upper-case hex consensus address, as CometBFT writes it
+	PubKey      string // base64 ed25519 key
+	VotingPower int64
+}
+
+const (
+	validatorsPerPage = 100
+	rpcBodyLimit      = 8 << 20
+)
+
+// getRPC reads a JSON-RPC-over-HTTP URI answer into out (the "result" member). CometBFT
+// reports a refused query as an {"error":{…}} envelope, with HTTP 500 or with 200
+// depending on the version, so the envelope is looked at before the status; its text is
+// classified into ErrHeightUnavailable / ErrHeightAhead where it names one.
+func getRPC(ctx context.Context, c *http.Client, url string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, rpcBodyLimit))
+	if err != nil {
+		return err
+	}
+	var env struct {
+		Result json.RawMessage `json:"result"`
+		Error  *struct {
+			Message string          `json:"message"`
+			Data    json.RawMessage `json:"data"`
+		} `json:"error"`
+	}
+	envErr := json.Unmarshal(b, &env)
+	if envErr == nil && env.Error != nil {
+		text := env.Error.Message + " " + string(env.Error.Data)
+		return fmt.Errorf("rpc error from %s: %w", url, classify(text))
+	}
+	if resp.StatusCode != http.StatusOK {
+		if len(b) > errorBodyLimit {
+			b = b[:errorBodyLimit]
+		}
+		return &statusError{url: url, status: resp.StatusCode, body: string(b)}
+	}
+	if envErr != nil {
+		return fmt.Errorf("rpc answer from %s: %w", url, envErr)
+	}
+	if len(env.Result) == 0 {
+		return fmt.Errorf("rpc answer from %s: no result", url)
+	}
+	return json.Unmarshal(env.Result, out)
+}
+
+// ValidatorSetAt returns the CometBFT validator set at height, paging /validators until
+// it holds the reported total. The answer must be for the height asked.
+func (r *RPC) ValidatorSetAt(ctx context.Context, height int64) ([]SetMember, error) {
+	var out []SetMember
+	seen := map[string]bool{}
+	for page := 1; ; page++ {
+		var body struct {
+			BlockHeight string `json:"block_height"`
+			Validators  []struct {
+				Address string `json:"address"`
+				PubKey  struct {
+					Value string `json:"value"`
+				} `json:"pub_key"`
+				VotingPower string `json:"voting_power"`
+			} `json:"validators"`
+			Total string `json:"total"`
+		}
+		url := fmt.Sprintf("%s/validators?height=%d&page=%d&per_page=%d", r.base, height, page, validatorsPerPage)
+		if err := getRPC(ctx, r.c, url, &body); err != nil {
+			return nil, fmt.Errorf("rpc validators at %d: %w", height, err)
+		}
+		if body.BlockHeight != strconv.FormatInt(height, 10) {
+			return nil, fmt.Errorf("rpc validators at %d: answer is for height %q", height, body.BlockHeight)
+		}
+		total, err := strconv.Atoi(body.Total)
+		if err != nil || total <= 0 {
+			return nil, fmt.Errorf("rpc validators at %d: total %q", height, body.Total)
+		}
+		if len(body.Validators) == 0 {
+			return nil, fmt.Errorf("rpc validators at %d: page %d is empty with %d of %d members read", height, page, len(out), total)
+		}
+		for _, v := range body.Validators {
+			p, err := strconv.ParseInt(v.VotingPower, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("rpc validators at %d: voting_power %q of %s: %w", height, v.VotingPower, v.Address, err)
+			}
+			// A node that pages wrongly can repeat a member; counted twice, its
+			// power would be inflated and the set size wrong.
+			if seen[strings.ToUpper(v.Address)] {
+				return nil, fmt.Errorf("rpc validators at %d: %s appears twice", height, v.Address)
+			}
+			seen[strings.ToUpper(v.Address)] = true
+			out = append(out, SetMember{Address: v.Address, PubKey: v.PubKey.Value, VotingPower: p})
+		}
+		if len(out) >= total {
+			if len(out) > total {
+				return nil, fmt.Errorf("rpc validators at %d: %d members read, total is %d", height, len(out), total)
+			}
+			return out, nil
+		}
+	}
+}
+
+var blockHashPattern = regexp.MustCompile(`^[0-9A-Fa-f]{64}$`)
+
+// BlockHashAt returns the hash of the block at height, from its commit.
+func (r *RPC) BlockHashAt(ctx context.Context, height int64) (string, error) {
+	var body struct {
+		SignedHeader struct {
+			Header struct {
+				Height string `json:"height"`
+			} `json:"header"`
+			Commit struct {
+				BlockID struct {
+					Hash string `json:"hash"`
+				} `json:"block_id"`
+			} `json:"commit"`
+		} `json:"signed_header"`
+	}
+	if err := getRPC(ctx, r.c, fmt.Sprintf("%s/commit?height=%d", r.base, height), &body); err != nil {
+		return "", fmt.Errorf("rpc commit at %d: %w", height, err)
+	}
+	if got := body.SignedHeader.Header.Height; got != strconv.FormatInt(height, 10) {
+		return "", fmt.Errorf("rpc commit at %d: answer is for height %q", height, got)
+	}
+	h := body.SignedHeader.Commit.BlockID.Hash
+	if !blockHashPattern.MatchString(h) {
+		return "", fmt.Errorf("rpc commit at %d: block hash %q", height, h)
+	}
+	return h, nil
 }

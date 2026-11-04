@@ -29,7 +29,7 @@ The fastest path is Docker (nothing else to install). For development you need G
 docker compose -f docker-compose.yml up -d
 ```
 
-The `saicond:dev` image is built, genesis is initialized on first start (validator key, gentx, REST enabled), and the node starts with `--minimum-gas-prices 0scn`. Blocks start flowing after ~10-20 seconds.
+The `saicond:dev` image is built, genesis is initialized on first start (validator key, gentx, REST enabled), and the node starts with `--minimum-gas-prices 0nscn`. Blocks start flowing after ~10-20 seconds.
 
 ```bash
 curl -s localhost:26657/health                       # {} = OK
@@ -154,7 +154,7 @@ saicond query validatorregistry list-validators --status-filter bonding --home ~
 See the full spec:
 - 📘 [DEVELOPMENT.md](docs/DEVELOPMENT.md) — the development guide: current state (modules, invariants, known limitations), formulas/parameters (Register v1.0), algorithms, evidence
 - 📋 [ADR-0001](docs/adr/ADR-0001-use-cosmos-sdk.md) — why Cosmos SDK
-- 📋 [ADR-0002](docs/adr/ADR-0002-cosmos-sdk-tooling-version-pin.md) — version pins (SDK v0.53.6, Ignite v29.10.0, Go 1.25.10)
+- 📋 [ADR-0002](docs/adr/ADR-0002-cosmos-sdk-tooling-version-pin.md) — version pins (Ignite v29.10.0, Go 1.25.10); the SDK pin moved to v0.53.8 in [ADR-0016](docs/adr/ADR-0016-cosmos-sdk-0-53-8-patch.md)
 
 ### Module overview
 
@@ -184,8 +184,9 @@ SAiCoN custom modules (implemented):
 
 | Component | Version |
 |---|---|
-| Cosmos SDK | v0.53.6 (Eden++) |
-| CometBFT | shipped with SDK v0.53 |
+| Cosmos SDK | v0.53.8 (Eden++; [ADR-0016](docs/adr/ADR-0016-cosmos-sdk-0-53-8-patch.md)) |
+| CometBFT | v0.38.25 |
+| ibc-go | v10.7.0 |
 | Ignite CLI | v29.10.0 |
 | Go | 1.25.10 (per `go.mod`, authoritative) |
 

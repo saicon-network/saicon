@@ -9,6 +9,7 @@ import (
 	"cosmossdk.io/log"
 	storetypes "cosmossdk.io/store/types"
 	circuitkeeper "cosmossdk.io/x/circuit/keeper"
+	evidencekeeper "cosmossdk.io/x/evidence/keeper"
 	upgradekeeper "cosmossdk.io/x/upgrade/keeper"
 
 	feegrantkeeper "cosmossdk.io/x/feegrant/keeper"
@@ -40,6 +41,7 @@ import (
 	paramskeeper "github.com/cosmos/cosmos-sdk/x/params/keeper"
 	paramstypes "github.com/cosmos/cosmos-sdk/x/params/types"
 	slashingkeeper "github.com/cosmos/cosmos-sdk/x/slashing/keeper"
+	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
 	icacontrollerkeeper "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/controller/keeper"
 	icahostkeeper "github.com/cosmos/ibc-go/v10/modules/apps/27-interchain-accounts/host/keeper"
@@ -48,7 +50,9 @@ import (
 
 	"github.com/saicon-network/saicon/chain/docs"
 	compliancemodulekeeper "github.com/saicon-network/saicon/chain/x/compliance/keeper"
+	entityregistrymodulekeeper "github.com/saicon-network/saicon/chain/x/entityregistry/keeper"
 	participationmodulekeeper "github.com/saicon-network/saicon/chain/x/participation/keeper"
+	randomnessmodulekeeper "github.com/saicon-network/saicon/chain/x/randomness/keeper"
 	rewardsmodulekeeper "github.com/saicon-network/saicon/chain/x/rewards/keeper"
 	stakeenginemodulekeeper "github.com/saicon-network/saicon/chain/x/stakeengine/keeper"
 	validatorregistrymodulekeeper "github.com/saicon-network/saicon/chain/x/validatorregistry/keeper"
@@ -95,6 +99,7 @@ type App struct {
 	FeeGrantKeeper        feegrantkeeper.Keeper
 	ConsensusParamsKeeper consensuskeeper.Keeper
 	CircuitBreakerKeeper  circuitkeeper.Keeper
+	EvidenceKeeper        evidencekeeper.Keeper
 	ParamsKeeper          paramskeeper.Keeper //nolint:staticcheck // x/params is deprecated in the SDK but still wired by the scaffold; removing it is an SDK-upgrade task
 
 	// ibc keepers
@@ -110,6 +115,8 @@ type App struct {
 	ParticipationKeeper     participationmodulekeeper.Keeper
 	RewardsKeeper           rewardsmodulekeeper.Keeper
 	StakeengineKeeper       stakeenginemodulekeeper.Keeper
+	EntityregistryKeeper    entityregistrymodulekeeper.Keeper
+	RandomnessKeeper        randomnessmodulekeeper.Keeper
 }
 
 func init() {
@@ -129,6 +136,8 @@ func AppConfig() depinject.Config {
 			// supply custom module basics
 			map[string]module.AppModuleBasic{
 				genutiltypes.ModuleName: genutil.NewAppModuleBasic(genutiltypes.DefaultMessageValidator),
+				// the slashing policy of ADR-0010 as the default genesis
+				slashingtypes.ModuleName: slashingBasic{},
 			},
 		),
 	)
@@ -188,12 +197,15 @@ func New(
 		&app.FeeGrantKeeper,
 		&app.ConsensusParamsKeeper,
 		&app.CircuitBreakerKeeper,
+		&app.EvidenceKeeper,
 		&app.ParamsKeeper,
 		&app.ValidatorregistryKeeper,
 		&app.ComplianceKeeper,
 		&app.ParticipationKeeper,
 		&app.RewardsKeeper,
 		&app.StakeengineKeeper,
+		&app.EntityregistryKeeper,
+		&app.RandomnessKeeper,
 	); err != nil {
 		panic(err)
 	}
@@ -250,6 +262,8 @@ func New(
 		}
 		return app.InitChainer(ctx, req)
 	})
+
+	app.registerUpgrades()
 
 	if err := app.Load(loadLatest); err != nil {
 		panic(err)

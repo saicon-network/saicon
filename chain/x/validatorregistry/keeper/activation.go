@@ -2,6 +2,7 @@ package keeper
 
 import (
 	"context"
+	"errors"
 	"strconv"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -26,9 +27,12 @@ import (
 //     recovery goes through the compliance/unjail path.
 //
 // Transitions always go through ChangeStatus so the V-1 gate validates the edge
-// and the status-changed event is emitted (audit trail). The intermediate
-// BONDING in the auto-create path never persists across a block boundary, so the
-// EndBlock V-1 invariant never observes it.
+// and the status-changed event is emitted (audit trail). Every move to ACTIVE
+// also passes the entity registry's activation gate; when the gate holds the
+// validator, the record stays where it is. In the auto-create path that means
+// the BONDING record persists across the block boundary, so the EndBlock V-1
+// invariant observes it — V-1 only requires a valid status — and
+// x/entityregistry promotes it in EndBlock once it is attested.
 func (k Keeper) ActivateOnBond(ctx context.Context, valAddr sdk.ValAddress) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 
@@ -60,12 +64,12 @@ func (k Keeper) ActivateOnBond(ctx context.Context, valAddr sdk.ValAddress) erro
 			sdk.NewAttribute(types.AttributeKeyHeight, strconv.FormatInt(sdkCtx.BlockHeight(), 10)),
 		))
 
-		return k.ChangeStatus(ctx, valAddr, types.Status_STATUS_ACTIVE)
+		return k.activateOrHold(ctx, valAddr)
 	}
 
 	switch md.Status {
 	case types.Status_STATUS_BONDING:
-		return k.ChangeStatus(ctx, valAddr, types.Status_STATUS_ACTIVE)
+		return k.activateOrHold(ctx, valAddr)
 	case types.Status_STATUS_ACTIVE:
 		return nil
 	case types.Status_STATUS_UNBONDING:
@@ -117,5 +121,25 @@ func (k Keeper) resumeAfterAbortedExit(ctx context.Context, valAddr sdk.ValAddre
 		"restored_to", restored.HumanString(),
 	)
 
+	if restored == types.Status_STATUS_ACTIVE {
+		return k.activateOrHold(ctx, valAddr)
+	}
 	return k.ChangeStatus(ctx, valAddr, restored)
+}
+
+// activateOrHold moves valAddr to ACTIVE, or leaves it where it is when the
+// entity registry holds it. A hold is not a failure of the bond hook: the
+// validator stays BONDING (or UNBONDING) and x/entityregistry promotes it in
+// EndBlock once it is attested and its entity has a free seat.
+func (k Keeper) activateOrHold(ctx context.Context, valAddr sdk.ValAddress) error {
+	err := k.ChangeStatus(ctx, valAddr, types.Status_STATUS_ACTIVE)
+	if errors.Is(err, types.ErrActivationHeld) {
+		sdk.UnwrapSDKContext(ctx).Logger().Info(
+			"validatorregistry: activation held by the entity registry",
+			"validator", valAddr.String(),
+			"reason", err.Error(),
+		)
+		return nil
+	}
+	return err
 }

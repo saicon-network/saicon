@@ -5,6 +5,7 @@ package types
 
 import (
 	context "context"
+	cosmossdk_io_math "cosmossdk.io/math"
 	fmt "fmt"
 	_ "github.com/cosmos/cosmos-proto"
 	_ "github.com/cosmos/cosmos-sdk/types/msgservice"
@@ -438,6 +439,130 @@ func (m *MsgUpdateParamsResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_MsgUpdateParamsResponse proto.InternalMessageInfo
 
+// MsgFireCoordinatedSanction fires the coordinated-attack sanction against the
+// named offences of an armed entity (spec §7). It travels in a gov proposal.
+type MsgFireCoordinatedSanction struct {
+	// authority must be the module authority (x/gov account).
+	Authority string `protobuf:"bytes,1,opt,name=authority,proto3" json:"authority,omitempty"`
+	// entity_id is the armed entity.
+	EntityId string `protobuf:"bytes,2,opt,name=entity_id,json=entityId,proto3" json:"entity_id,omitempty"`
+	// evidence_hashes names the offences to fire: 64 uppercase hex each, 1..16, unique.
+	EvidenceHashes []string `protobuf:"bytes,3,rep,name=evidence_hashes,json=evidenceHashes,proto3" json:"evidence_hashes,omitempty"`
+	// fraction is the total share burned per target; it must equal
+	// params.coordinated_attack_fraction at execution (spec C9).
+	Fraction cosmossdk_io_math.LegacyDec `protobuf:"bytes,4,opt,name=fraction,proto3,customtype=cosmossdk.io/math.LegacyDec" json:"fraction"`
+	// reason is a free-text justification, at most 256 bytes, recorded in the
+	// sanction and in the C-flag reason.
+	Reason string `protobuf:"bytes,5,opt,name=reason,proto3" json:"reason,omitempty"`
+}
+
+func (m *MsgFireCoordinatedSanction) Reset()         { *m = MsgFireCoordinatedSanction{} }
+func (m *MsgFireCoordinatedSanction) String() string { return proto.CompactTextString(m) }
+func (*MsgFireCoordinatedSanction) ProtoMessage()    {}
+func (*MsgFireCoordinatedSanction) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a702f20e28bd022f, []int{8}
+}
+func (m *MsgFireCoordinatedSanction) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *MsgFireCoordinatedSanction) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_MsgFireCoordinatedSanction.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *MsgFireCoordinatedSanction) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_MsgFireCoordinatedSanction.Merge(m, src)
+}
+func (m *MsgFireCoordinatedSanction) XXX_Size() int {
+	return m.Size()
+}
+func (m *MsgFireCoordinatedSanction) XXX_DiscardUnknown() {
+	xxx_messageInfo_MsgFireCoordinatedSanction.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_MsgFireCoordinatedSanction proto.InternalMessageInfo
+
+func (m *MsgFireCoordinatedSanction) GetAuthority() string {
+	if m != nil {
+		return m.Authority
+	}
+	return ""
+}
+
+func (m *MsgFireCoordinatedSanction) GetEntityId() string {
+	if m != nil {
+		return m.EntityId
+	}
+	return ""
+}
+
+func (m *MsgFireCoordinatedSanction) GetEvidenceHashes() []string {
+	if m != nil {
+		return m.EvidenceHashes
+	}
+	return nil
+}
+
+func (m *MsgFireCoordinatedSanction) GetReason() string {
+	if m != nil {
+		return m.Reason
+	}
+	return ""
+}
+
+// MsgFireCoordinatedSanctionResponse is the response for FireCoordinatedSanction.
+type MsgFireCoordinatedSanctionResponse struct {
+	// sanction_id is the id of the stored Sanction.
+	SanctionId uint64 `protobuf:"varint,1,opt,name=sanction_id,json=sanctionId,proto3" json:"sanction_id,omitempty"`
+}
+
+func (m *MsgFireCoordinatedSanctionResponse) Reset()         { *m = MsgFireCoordinatedSanctionResponse{} }
+func (m *MsgFireCoordinatedSanctionResponse) String() string { return proto.CompactTextString(m) }
+func (*MsgFireCoordinatedSanctionResponse) ProtoMessage()    {}
+func (*MsgFireCoordinatedSanctionResponse) Descriptor() ([]byte, []int) {
+	return fileDescriptor_a702f20e28bd022f, []int{9}
+}
+func (m *MsgFireCoordinatedSanctionResponse) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *MsgFireCoordinatedSanctionResponse) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_MsgFireCoordinatedSanctionResponse.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *MsgFireCoordinatedSanctionResponse) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_MsgFireCoordinatedSanctionResponse.Merge(m, src)
+}
+func (m *MsgFireCoordinatedSanctionResponse) XXX_Size() int {
+	return m.Size()
+}
+func (m *MsgFireCoordinatedSanctionResponse) XXX_DiscardUnknown() {
+	xxx_messageInfo_MsgFireCoordinatedSanctionResponse.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_MsgFireCoordinatedSanctionResponse proto.InternalMessageInfo
+
+func (m *MsgFireCoordinatedSanctionResponse) GetSanctionId() uint64 {
+	if m != nil {
+		return m.SanctionId
+	}
+	return 0
+}
+
 func init() {
 	proto.RegisterType((*MsgSubmitEvidence)(nil), "chain.compliance.v1.MsgSubmitEvidence")
 	proto.RegisterType((*MsgSubmitEvidenceResponse)(nil), "chain.compliance.v1.MsgSubmitEvidenceResponse")
@@ -447,50 +572,63 @@ func init() {
 	proto.RegisterType((*MsgUnjailResponse)(nil), "chain.compliance.v1.MsgUnjailResponse")
 	proto.RegisterType((*MsgUpdateParams)(nil), "chain.compliance.v1.MsgUpdateParams")
 	proto.RegisterType((*MsgUpdateParamsResponse)(nil), "chain.compliance.v1.MsgUpdateParamsResponse")
+	proto.RegisterType((*MsgFireCoordinatedSanction)(nil), "chain.compliance.v1.MsgFireCoordinatedSanction")
+	proto.RegisterType((*MsgFireCoordinatedSanctionResponse)(nil), "chain.compliance.v1.MsgFireCoordinatedSanctionResponse")
 }
 
 func init() { proto.RegisterFile("chain/compliance/v1/tx.proto", fileDescriptor_a702f20e28bd022f) }
 
 var fileDescriptor_a702f20e28bd022f = []byte{
-	// 598 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xc4, 0x94, 0x3d, 0x6f, 0xd3, 0x4e,
-	0x1c, 0xc7, 0xe3, 0xe6, 0xdf, 0x48, 0xb9, 0x7f, 0x55, 0xa8, 0x5b, 0xb5, 0x89, 0x5b, 0x39, 0xc1,
-	0xaa, 0xaa, 0x10, 0xa8, 0xad, 0x06, 0x01, 0xa2, 0x43, 0x25, 0x52, 0x95, 0x2d, 0x52, 0x95, 0xc0,
-	0x00, 0x4b, 0x75, 0x71, 0x4e, 0x97, 0x83, 0xf8, 0xce, 0xf2, 0x5d, 0x42, 0xb3, 0x21, 0x16, 0x04,
-	0x13, 0x2f, 0x83, 0x31, 0x03, 0x0b, 0x13, 0x8c, 0x1d, 0x2b, 0x26, 0x26, 0x84, 0x92, 0x21, 0x6f,
-	0x03, 0xd9, 0xe7, 0x38, 0x4f, 0x0e, 0x54, 0x0c, 0xb0, 0x44, 0xf9, 0xdd, 0xf7, 0xfb, 0x7b, 0xf8,
-	0x9c, 0xef, 0x0e, 0xec, 0xd8, 0x4d, 0x48, 0xa8, 0x65, 0x33, 0xc7, 0x6d, 0x11, 0x48, 0x6d, 0x64,
-	0x75, 0x0e, 0x2c, 0x71, 0x6e, 0xba, 0x1e, 0x13, 0x4c, 0x5d, 0x0f, 0x54, 0x73, 0xac, 0x9a, 0x9d,
-	0x03, 0x6d, 0x0d, 0x3a, 0x84, 0x32, 0x2b, 0xf8, 0x95, 0x3e, 0x2d, 0x1f, 0x57, 0xc5, 0x85, 0x1e,
-	0x74, 0x78, 0xe8, 0xc8, 0xc5, 0xf6, 0xe9, 0xba, 0x68, 0x64, 0xd8, 0xb2, 0x19, 0x77, 0x18, 0xb7,
-	0x1c, 0x8e, 0x7d, 0xc9, 0xe1, 0x38, 0x14, 0xb2, 0x52, 0x38, 0x0b, 0x22, 0x4b, 0x06, 0xa1, 0xb4,
-	0x81, 0x19, 0x66, 0x72, 0xdd, 0xff, 0x27, 0x57, 0x8d, 0xb7, 0x4b, 0x60, 0xad, 0xc2, 0x71, 0xad,
-	0x5d, 0x77, 0x88, 0x38, 0xe9, 0x90, 0x06, 0xa2, 0x36, 0x52, 0xef, 0x81, 0x34, 0x6c, 0x8b, 0x26,
-	0xf3, 0x88, 0xe8, 0x66, 0x94, 0xbc, 0x52, 0x48, 0x97, 0x33, 0x5f, 0x3f, 0xee, 0x6f, 0x84, 0x05,
-	0x1f, 0x36, 0x1a, 0x1e, 0xe2, 0xbc, 0x26, 0x3c, 0x42, 0x71, 0x75, 0x6c, 0x55, 0x6f, 0x81, 0xb5,
-	0x0e, 0x6c, 0x91, 0x06, 0x14, 0xcc, 0x3b, 0x83, 0xd2, 0x95, 0x59, 0xf2, 0xf3, 0xab, 0xd7, 0x23,
-	0x21, 0xcc, 0x56, 0x8f, 0xc0, 0x32, 0xea, 0x20, 0x2a, 0x32, 0xc9, 0xbc, 0x52, 0x58, 0x2d, 0x15,
-	0xcc, 0x98, 0xfd, 0x33, 0x8f, 0xa3, 0xe8, 0xc4, 0xf7, 0x3e, 0xee, 0xba, 0xa8, 0x2a, 0xd3, 0xd4,
-	0x4d, 0x90, 0xf2, 0x10, 0xe4, 0x8c, 0x66, 0xfe, 0x0b, 0x3a, 0x84, 0xd1, 0xe1, 0xfd, 0xd7, 0xc3,
-	0x5e, 0x71, 0x3c, 0xd4, 0xbb, 0x61, 0xaf, 0xb8, 0x2b, 0x37, 0xf4, 0x7c, 0x72, 0x4b, 0xe7, 0xa8,
-	0x8d, 0x6d, 0x90, 0x9d, 0x5b, 0xac, 0x22, 0xee, 0x32, 0xca, 0x91, 0xf1, 0x59, 0x01, 0x2b, 0x15,
-	0x8e, 0x8f, 0x5b, 0x08, 0x7a, 0x8f, 0x5a, 0x10, 0xff, 0x9d, 0x3d, 0x1a, 0x33, 0x26, 0xa7, 0x18,
-	0x4b, 0xf3, 0x8c, 0xb9, 0x78, 0xc6, 0x68, 0x60, 0x63, 0x13, 0x6c, 0x4c, 0xc6, 0x11, 0xd9, 0x27,
-	0x05, 0xa4, 0x2b, 0x1c, 0x3f, 0xa1, 0xcf, 0x21, 0x69, 0xfd, 0x5b, 0x2c, 0x6b, 0x1e, 0x6b, 0x27,
-	0x1e, 0x4b, 0x4e, 0x6b, 0xac, 0x07, 0xa7, 0x57, 0x06, 0x11, 0xd0, 0x17, 0x05, 0x5c, 0xf3, 0x57,
-	0xdd, 0x06, 0x14, 0xe8, 0x34, 0xb8, 0x58, 0x7f, 0x8c, 0x75, 0x04, 0x52, 0xf2, 0x6a, 0x06, 0x2c,
-	0xff, 0x97, 0xb6, 0x63, 0x4f, 0xa9, 0x6c, 0x52, 0x4e, 0x5f, 0x7c, 0xcf, 0x25, 0x3e, 0x0c, 0x7b,
-	0x45, 0xa5, 0x1a, 0x66, 0x1d, 0xde, 0x9d, 0x27, 0x32, 0x16, 0x10, 0x4d, 0x8c, 0x6b, 0x64, 0xc1,
-	0xd6, 0xcc, 0xd2, 0x88, 0xae, 0xf4, 0x26, 0x09, 0x92, 0x15, 0x8e, 0xd5, 0x3a, 0x58, 0x99, 0x22,
-	0xdc, 0x8d, 0x9d, 0x6c, 0xa6, 0x8a, 0x76, 0xfb, 0x2a, 0xae, 0x51, 0x2f, 0xb5, 0x09, 0x56, 0x67,
-	0x5e, 0x86, 0xbd, 0x45, 0xf9, 0xd3, 0x3e, 0xcd, 0xbc, 0x9a, 0x2f, 0xea, 0xf4, 0x14, 0xa4, 0xc7,
-	0x57, 0xeb, 0xc6, 0xa2, 0xe4, 0xc8, 0xa2, 0xdd, 0xfc, 0xad, 0x25, 0x2a, 0x7d, 0x0a, 0x52, 0xe1,
-	0xd9, 0xd6, 0x17, 0xc2, 0x07, 0xba, 0xb6, 0xf7, 0x6b, 0x7d, 0x54, 0x51, 0x5b, 0x7e, 0xe5, 0x7f,
-	0xe3, 0x72, 0xed, 0xa2, 0xaf, 0x2b, 0x97, 0x7d, 0x5d, 0xf9, 0xd1, 0xd7, 0x95, 0xf7, 0x03, 0x3d,
-	0x71, 0x39, 0xd0, 0x13, 0xdf, 0x06, 0x7a, 0xe2, 0xd9, 0x03, 0x4c, 0x44, 0xb3, 0x5d, 0xf7, 0x0b,
-	0x59, 0x1c, 0x12, 0x9b, 0xd1, 0x7d, 0x8a, 0xc4, 0x4b, 0xe6, 0xbd, 0x08, 0x43, 0x2b, 0xe6, 0x0c,
-	0x04, 0x0f, 0x7c, 0x3d, 0x15, 0xbc, 0xcb, 0x77, 0x7e, 0x06, 0x00, 0x00, 0xff, 0xff, 0xa1, 0xfc,
-	0x92, 0x59, 0x6c, 0x06, 0x00, 0x00,
+	// 770 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xc4, 0x55, 0xcf, 0x4f, 0x13, 0x4f,
+	0x14, 0xef, 0x52, 0x68, 0xe8, 0x40, 0xe0, 0xcb, 0x42, 0xa0, 0x6c, 0x49, 0xdb, 0xef, 0x86, 0x60,
+	0x45, 0xd9, 0x0d, 0x35, 0x4a, 0xe4, 0x40, 0x62, 0xf9, 0x11, 0x49, 0x6c, 0x42, 0xb6, 0x7a, 0xd0,
+	0x4b, 0x33, 0xdd, 0x1d, 0xb7, 0x23, 0xdd, 0x9d, 0x66, 0x67, 0xa8, 0xf4, 0x66, 0xf4, 0xa4, 0x89,
+	0x89, 0x7f, 0x86, 0x47, 0x0e, 0x1c, 0xf4, 0xa4, 0x47, 0x8e, 0x84, 0x93, 0xf1, 0x40, 0x0c, 0x1c,
+	0xf8, 0x37, 0xcc, 0xee, 0x6c, 0xb7, 0x2d, 0xdd, 0x55, 0xe4, 0xa0, 0x97, 0xa6, 0xef, 0xbd, 0xcf,
+	0x7b, 0xf3, 0x3e, 0x9f, 0x7d, 0x6f, 0x06, 0xcc, 0xe9, 0x35, 0x88, 0x6d, 0x55, 0x27, 0x56, 0xa3,
+	0x8e, 0xa1, 0xad, 0x23, 0xb5, 0xb9, 0xac, 0xb2, 0x7d, 0xa5, 0xe1, 0x10, 0x46, 0xc4, 0x49, 0x2f,
+	0xaa, 0x74, 0xa2, 0x4a, 0x73, 0x59, 0x9a, 0x80, 0x16, 0xb6, 0x89, 0xea, 0xfd, 0x72, 0x9c, 0x94,
+	0x0b, 0xab, 0xd2, 0x80, 0x0e, 0xb4, 0xa8, 0x8f, 0xc8, 0x86, 0x9e, 0xd3, 0x6a, 0xa0, 0x36, 0x60,
+	0x46, 0x27, 0xd4, 0x22, 0x54, 0xb5, 0xa8, 0xe9, 0x86, 0x2c, 0x6a, 0xfa, 0x81, 0x59, 0x1e, 0xa8,
+	0x78, 0x96, 0xca, 0x0d, 0x3f, 0x34, 0x65, 0x12, 0x93, 0x70, 0xbf, 0xfb, 0x8f, 0x7b, 0xe5, 0xb7,
+	0x03, 0x60, 0xa2, 0x44, 0xcd, 0xf2, 0x5e, 0xd5, 0xc2, 0x6c, 0xb3, 0x89, 0x0d, 0x64, 0xeb, 0x48,
+	0xbc, 0x07, 0x92, 0x70, 0x8f, 0xd5, 0x88, 0x83, 0x59, 0x2b, 0x25, 0xe4, 0x84, 0x7c, 0xb2, 0x98,
+	0x3a, 0x39, 0x5c, 0x9a, 0xf2, 0x0b, 0x3e, 0x30, 0x0c, 0x07, 0x51, 0x5a, 0x66, 0x0e, 0xb6, 0x4d,
+	0xad, 0x03, 0x15, 0x6f, 0x81, 0x89, 0x26, 0xac, 0x63, 0x03, 0x32, 0xe2, 0x54, 0x20, 0x47, 0xa5,
+	0x06, 0xdc, 0x7c, 0xed, 0xbf, 0x20, 0xe0, 0x67, 0x8b, 0x6b, 0x60, 0x08, 0x35, 0x91, 0xcd, 0x52,
+	0xf1, 0x9c, 0x90, 0x1f, 0x2b, 0xe4, 0x95, 0x10, 0xfd, 0x94, 0xf5, 0xc0, 0xda, 0x74, 0xb1, 0x8f,
+	0x5b, 0x0d, 0xa4, 0xf1, 0x34, 0x71, 0x1a, 0x24, 0x1c, 0x04, 0x29, 0xb1, 0x53, 0x83, 0xde, 0x09,
+	0xbe, 0xb5, 0xba, 0xf2, 0xfa, 0xe2, 0x60, 0xb1, 0xd3, 0xd4, 0xbb, 0x8b, 0x83, 0xc5, 0x79, 0x2e,
+	0xe8, 0x7e, 0xb7, 0xa4, 0x7d, 0xac, 0xe5, 0x34, 0x98, 0xed, 0x73, 0x6a, 0x88, 0x36, 0x88, 0x4d,
+	0x91, 0xfc, 0x45, 0x00, 0xa3, 0x25, 0x6a, 0xae, 0xd7, 0x11, 0x74, 0xb6, 0xea, 0xd0, 0xfc, 0x3b,
+	0x1a, 0x75, 0x38, 0xc6, 0x7b, 0x38, 0x16, 0xfa, 0x39, 0x66, 0xc3, 0x39, 0x06, 0x0d, 0xcb, 0xd3,
+	0x60, 0xaa, 0xdb, 0x0e, 0x98, 0x7d, 0x16, 0x40, 0xb2, 0x44, 0xcd, 0x27, 0xf6, 0x0b, 0x88, 0xeb,
+	0xff, 0x96, 0x96, 0xda, 0x4f, 0x6b, 0x2e, 0x9c, 0x16, 0xef, 0x56, 0x9e, 0xf4, 0xa6, 0x97, 0x1b,
+	0x01, 0xa1, 0xaf, 0x02, 0x18, 0x77, 0xbd, 0x0d, 0x03, 0x32, 0xb4, 0xe3, 0x2d, 0xd6, 0xb5, 0x69,
+	0xad, 0x81, 0x04, 0x5f, 0x4d, 0x8f, 0xcb, 0x48, 0x21, 0x1d, 0x3a, 0xa5, 0xfc, 0x90, 0x62, 0xf2,
+	0xe8, 0x34, 0x1b, 0xfb, 0x78, 0x71, 0xb0, 0x28, 0x68, 0x7e, 0xd6, 0xea, 0xdd, 0x7e, 0x46, 0x72,
+	0x04, 0xa3, 0xae, 0x76, 0xe5, 0x59, 0x30, 0x73, 0xc9, 0x15, 0xb0, 0xfb, 0x34, 0x00, 0xa4, 0x12,
+	0x35, 0xb7, 0xb0, 0x83, 0xd6, 0x09, 0x71, 0x0c, 0x6c, 0x43, 0x86, 0x8c, 0x32, 0xb4, 0x75, 0x86,
+	0x89, 0x7d, 0x6d, 0xa2, 0x69, 0x90, 0x44, 0x36, 0xc3, 0xac, 0x55, 0xc1, 0x86, 0xff, 0xdd, 0x86,
+	0xb9, 0x63, 0xdb, 0x10, 0x6f, 0x80, 0x71, 0xe4, 0x2f, 0x44, 0xa5, 0x06, 0x69, 0x0d, 0xd1, 0x54,
+	0x3c, 0x17, 0xcf, 0x27, 0xb5, 0xb1, 0xb6, 0xfb, 0xa1, 0xe7, 0x15, 0x4b, 0x60, 0xf8, 0xb9, 0x03,
+	0xbd, 0x4e, 0xf8, 0x56, 0x16, 0x97, 0x5d, 0x4d, 0xbe, 0x9f, 0x66, 0xd3, 0xbc, 0x01, 0x6a, 0xec,
+	0x2a, 0x98, 0xa8, 0x16, 0x64, 0x35, 0xe5, 0x11, 0x32, 0xa1, 0xde, 0xda, 0x40, 0xfa, 0xc9, 0xe1,
+	0x12, 0xf0, 0xfb, 0xdb, 0x40, 0xba, 0x16, 0x94, 0xe8, 0x9a, 0x93, 0xa1, 0x9e, 0x39, 0xb9, 0xba,
+	0xaa, 0xae, 0x4c, 0x6d, 0x6d, 0xe4, 0x4d, 0x20, 0x47, 0x2b, 0xd7, 0x16, 0x58, 0xcc, 0x82, 0x11,
+	0xea, 0xfb, 0x5c, 0x2d, 0x5c, 0x0d, 0x07, 0x35, 0xd0, 0x76, 0x6d, 0x1b, 0x85, 0xf7, 0x83, 0x20,
+	0x5e, 0xa2, 0xa6, 0x58, 0x05, 0xa3, 0x3d, 0x33, 0x36, 0x1f, 0x3a, 0x1b, 0x97, 0xbe, 0xa3, 0x74,
+	0xfb, 0x2a, 0xa8, 0xa0, 0x99, 0x1a, 0x18, 0xbb, 0x74, 0x37, 0x2f, 0x44, 0xe5, 0xf7, 0xe2, 0x24,
+	0xe5, 0x6a, 0xb8, 0xe0, 0xa4, 0xa7, 0x20, 0xd9, 0xb9, 0xdc, 0xfe, 0x8f, 0x4a, 0x0e, 0x20, 0xd2,
+	0xcd, 0xdf, 0x42, 0x82, 0xd2, 0x3b, 0x20, 0xe1, 0xdf, 0x2e, 0x99, 0x48, 0xf2, 0x5e, 0x5c, 0x5a,
+	0xf8, 0x75, 0x3c, 0xa8, 0xf8, 0x46, 0x00, 0x33, 0x51, 0x1b, 0xa0, 0x46, 0xd5, 0x88, 0x48, 0x90,
+	0x56, 0xfe, 0x30, 0xa1, 0xdd, 0x85, 0x34, 0xf4, 0xca, 0xdd, 0xf5, 0x62, 0xf9, 0xe8, 0x2c, 0x23,
+	0x1c, 0x9f, 0x65, 0x84, 0x1f, 0x67, 0x19, 0xe1, 0xc3, 0x79, 0x26, 0x76, 0x7c, 0x9e, 0x89, 0x7d,
+	0x3b, 0xcf, 0xc4, 0x9e, 0xdd, 0x37, 0x31, 0xab, 0xed, 0x55, 0xdd, 0xca, 0x2a, 0x85, 0x58, 0x27,
+	0xf6, 0x92, 0x8d, 0xd8, 0x4b, 0xe2, 0xec, 0xfa, 0xa6, 0x1a, 0x32, 0xb5, 0xde, 0x43, 0x5f, 0x4d,
+	0x78, 0xef, 0xf3, 0x9d, 0x9f, 0x01, 0x00, 0x00, 0xff, 0xff, 0x10, 0x65, 0xef, 0x8f, 0x74, 0x08,
+	0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -519,6 +657,10 @@ type MsgClient interface {
 	// a block-based cooldown and an x/slashing tombstone check. Authority-gated
 	// (x/gov account).
 	Unjail(ctx context.Context, in *MsgUnjail, opts ...grpc.CallOption) (*MsgUnjailResponse, error)
+	// FireCoordinatedSanction: gov authority only; slashes the named double-signers
+	// of an armed entity to the governed total fraction after the appeal window
+	// (ADR-0010 §3, D-S8-2).
+	FireCoordinatedSanction(ctx context.Context, in *MsgFireCoordinatedSanction, opts ...grpc.CallOption) (*MsgFireCoordinatedSanctionResponse, error)
 }
 
 type msgClient struct {
@@ -565,6 +707,15 @@ func (c *msgClient) Unjail(ctx context.Context, in *MsgUnjail, opts ...grpc.Call
 	return out, nil
 }
 
+func (c *msgClient) FireCoordinatedSanction(ctx context.Context, in *MsgFireCoordinatedSanction, opts ...grpc.CallOption) (*MsgFireCoordinatedSanctionResponse, error) {
+	out := new(MsgFireCoordinatedSanctionResponse)
+	err := c.cc.Invoke(ctx, "/chain.compliance.v1.Msg/FireCoordinatedSanction", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MsgServer is the server API for Msg service.
 type MsgServer interface {
 	// UpdateParams defines a (governance) operation for updating the module
@@ -581,6 +732,10 @@ type MsgServer interface {
 	// a block-based cooldown and an x/slashing tombstone check. Authority-gated
 	// (x/gov account).
 	Unjail(context.Context, *MsgUnjail) (*MsgUnjailResponse, error)
+	// FireCoordinatedSanction: gov authority only; slashes the named double-signers
+	// of an armed entity to the governed total fraction after the appeal window
+	// (ADR-0010 §3, D-S8-2).
+	FireCoordinatedSanction(context.Context, *MsgFireCoordinatedSanction) (*MsgFireCoordinatedSanctionResponse, error)
 }
 
 // UnimplementedMsgServer can be embedded to have forward compatible implementations.
@@ -598,6 +753,9 @@ func (*UnimplementedMsgServer) ClearFlag(ctx context.Context, req *MsgClearFlag)
 }
 func (*UnimplementedMsgServer) Unjail(ctx context.Context, req *MsgUnjail) (*MsgUnjailResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Unjail not implemented")
+}
+func (*UnimplementedMsgServer) FireCoordinatedSanction(ctx context.Context, req *MsgFireCoordinatedSanction) (*MsgFireCoordinatedSanctionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method FireCoordinatedSanction not implemented")
 }
 
 func RegisterMsgServer(s grpc1.Server, srv MsgServer) {
@@ -676,6 +834,24 @@ func _Msg_Unjail_Handler(srv interface{}, ctx context.Context, dec func(interfac
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Msg_FireCoordinatedSanction_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MsgFireCoordinatedSanction)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MsgServer).FireCoordinatedSanction(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/chain.compliance.v1.Msg/FireCoordinatedSanction",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MsgServer).FireCoordinatedSanction(ctx, req.(*MsgFireCoordinatedSanction))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 var Msg_serviceDesc = _Msg_serviceDesc
 var _Msg_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "chain.compliance.v1.Msg",
@@ -696,6 +872,10 @@ var _Msg_serviceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Unjail",
 			Handler:    _Msg_Unjail_Handler,
+		},
+		{
+			MethodName: "FireCoordinatedSanction",
+			Handler:    _Msg_FireCoordinatedSanction_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -971,6 +1151,97 @@ func (m *MsgUpdateParamsResponse) MarshalToSizedBuffer(dAtA []byte) (int, error)
 	return len(dAtA) - i, nil
 }
 
+func (m *MsgFireCoordinatedSanction) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *MsgFireCoordinatedSanction) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *MsgFireCoordinatedSanction) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if len(m.Reason) > 0 {
+		i -= len(m.Reason)
+		copy(dAtA[i:], m.Reason)
+		i = encodeVarintTx(dAtA, i, uint64(len(m.Reason)))
+		i--
+		dAtA[i] = 0x2a
+	}
+	{
+		size := m.Fraction.Size()
+		i -= size
+		if _, err := m.Fraction.MarshalTo(dAtA[i:]); err != nil {
+			return 0, err
+		}
+		i = encodeVarintTx(dAtA, i, uint64(size))
+	}
+	i--
+	dAtA[i] = 0x22
+	if len(m.EvidenceHashes) > 0 {
+		for iNdEx := len(m.EvidenceHashes) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.EvidenceHashes[iNdEx])
+			copy(dAtA[i:], m.EvidenceHashes[iNdEx])
+			i = encodeVarintTx(dAtA, i, uint64(len(m.EvidenceHashes[iNdEx])))
+			i--
+			dAtA[i] = 0x1a
+		}
+	}
+	if len(m.EntityId) > 0 {
+		i -= len(m.EntityId)
+		copy(dAtA[i:], m.EntityId)
+		i = encodeVarintTx(dAtA, i, uint64(len(m.EntityId)))
+		i--
+		dAtA[i] = 0x12
+	}
+	if len(m.Authority) > 0 {
+		i -= len(m.Authority)
+		copy(dAtA[i:], m.Authority)
+		i = encodeVarintTx(dAtA, i, uint64(len(m.Authority)))
+		i--
+		dAtA[i] = 0xa
+	}
+	return len(dAtA) - i, nil
+}
+
+func (m *MsgFireCoordinatedSanctionResponse) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *MsgFireCoordinatedSanctionResponse) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *MsgFireCoordinatedSanctionResponse) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.SanctionId != 0 {
+		i = encodeVarintTx(dAtA, i, uint64(m.SanctionId))
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func encodeVarintTx(dAtA []byte, offset int, v uint64) int {
 	offset -= sovTx(v)
 	base := offset
@@ -1096,6 +1367,47 @@ func (m *MsgUpdateParamsResponse) Size() (n int) {
 	}
 	var l int
 	_ = l
+	return n
+}
+
+func (m *MsgFireCoordinatedSanction) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	l = len(m.Authority)
+	if l > 0 {
+		n += 1 + l + sovTx(uint64(l))
+	}
+	l = len(m.EntityId)
+	if l > 0 {
+		n += 1 + l + sovTx(uint64(l))
+	}
+	if len(m.EvidenceHashes) > 0 {
+		for _, s := range m.EvidenceHashes {
+			l = len(s)
+			n += 1 + l + sovTx(uint64(l))
+		}
+	}
+	l = m.Fraction.Size()
+	n += 1 + l + sovTx(uint64(l))
+	l = len(m.Reason)
+	if l > 0 {
+		n += 1 + l + sovTx(uint64(l))
+	}
+	return n
+}
+
+func (m *MsgFireCoordinatedSanctionResponse) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.SanctionId != 0 {
+		n += 1 + sovTx(uint64(m.SanctionId))
+	}
 	return n
 }
 
@@ -1856,6 +2168,287 @@ func (m *MsgUpdateParamsResponse) Unmarshal(dAtA []byte) error {
 			return fmt.Errorf("proto: MsgUpdateParamsResponse: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
+		default:
+			iNdEx = preIndex
+			skippy, err := skipTx(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthTx
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *MsgFireCoordinatedSanction) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowTx
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: MsgFireCoordinatedSanction: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: MsgFireCoordinatedSanction: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Authority", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Authority = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EntityId", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.EntityId = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field EvidenceHashes", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.EvidenceHashes = append(m.EvidenceHashes, string(dAtA[iNdEx:postIndex]))
+			iNdEx = postIndex
+		case 4:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Fraction", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			if err := m.Fraction.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
+		case 5:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Reason", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthTx
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthTx
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Reason = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
+		default:
+			iNdEx = preIndex
+			skippy, err := skipTx(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
+				return ErrInvalidLengthTx
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
+func (m *MsgFireCoordinatedSanctionResponse) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowTx
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: MsgFireCoordinatedSanctionResponse: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: MsgFireCoordinatedSanctionResponse: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field SanctionId", wireType)
+			}
+			m.SanctionId = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTx
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.SanctionId |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
 		default:
 			iNdEx = preIndex
 			skippy, err := skipTx(dAtA[iNdEx:])

@@ -10,9 +10,17 @@ import (
 	"github.com/saicon-network/saicon/chain/x/compliance/types"
 )
 
+// sanctionInProgress marks the context of a coordinated-attack sanction's own
+// slash: x/staking calls BeforeValidatorSlashed again inside it, and that burn
+// is classified by the sanction, not inferred as a double-sign (spec §8.5).
+type sanctionInProgress struct{}
+
+func inSanction(ctx context.Context) bool { return ctx.Value(sanctionInProgress{}) != nil }
+
 // Hooks wraps the compliance Keeper to implement stakingtypes.StakingHooks.
-// The only hook that does work is BeforeValidatorSlashed, which auto-flags
-// double-sign slashes; all other hooks are no-ops.
+// Two hooks do work: BeforeValidatorSlashed auto-flags double-sign slashes, and
+// AfterValidatorRemoved records the removal of a tombstoned consensus key; all
+// other hooks are no-ops.
 type Hooks struct {
 	k Keeper
 }
@@ -52,7 +60,15 @@ func (k Keeper) Hooks() Hooks {
 //
 // The hook must never error or halt the chain: validators not present in the
 // SAiCoN registry are silently ignored.
+//
+// The one exception to "any positive burn is a double-sign" is the slash of a
+// coordinated-attack sanction: its handler marks the context, and the hook
+// returns at once, because the sanction records its own classification
+// (compliance event COORDINATED_ATTACK) after the slash.
 func (h Hooks) BeforeValidatorSlashed(ctx context.Context, valAddr sdk.ValAddress, fraction math.LegacyDec) error {
+	if inSanction(ctx) {
+		return nil
+	}
 	if fraction.IsNil() || !fraction.IsPositive() {
 		return nil
 	}
@@ -93,7 +109,25 @@ func (h Hooks) BeforeValidatorModified(_ context.Context, _ sdk.ValAddress) erro
 	return nil
 }
 
-func (h Hooks) AfterValidatorRemoved(_ context.Context, _ sdk.ConsAddress, _ sdk.ValAddress) error {
+// AfterValidatorRemoved records a tombstoned consensus address whose validator
+// x/staking removed (spec §8.3). x/staking lets a validator be created again on
+// that key, by the same operator or another, and keeps the key tombstoned; the
+// record is what tells a coordinated-attack sanction that the validator it finds
+// there now is a new incarnation, which it must neither slash nor classify for
+// the old offence. Only tombstoned keys are recorded: x/evidence refuses a
+// tombstoned key, so every offence on one predates its removal.
+//
+// It never returns an error. Removal runs in x/staking's EndBlock or inside an
+// undelegation, and the hooks before and after this one must still run; a
+// failure is logged.
+func (h Hooks) AfterValidatorRemoved(ctx context.Context, consAddr sdk.ConsAddress, valAddr sdk.ValAddress) error {
+	if len(consAddr) == 0 || !h.k.slashingKeeper.IsTombstoned(ctx, consAddr) {
+		return nil
+	}
+	if err := h.k.RemovedConsensus.Set(ctx, consAddr); err != nil {
+		sdk.UnwrapSDKContext(ctx).Logger().Error("compliance: recording a removed consensus key failed",
+			"validator", valAddr.String(), "consensus_address", consAddr.String(), "err", err)
+	}
 	return nil
 }
 

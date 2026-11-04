@@ -35,6 +35,16 @@ type fakeKeeper struct {
 	slots map[string][]string // delegator bech32 → sorted valoper slots held
 	max   uint32
 	min   math.Int
+
+	standings map[string]types.EntityStanding // valoper → entity standing; missing means no entity
+}
+
+func (f *fakeKeeper) EntityStanding(_ context.Context, v sdk.ValAddress) (types.EntityStanding, error) {
+	f.reads++
+	if s, ok := f.standings[v.String()]; ok {
+		return s, f.err
+	}
+	return types.EntityStanding{Tokens: math.ZeroInt(), Cap: math.ZeroInt()}, f.err
 }
 
 func (f *fakeKeeper) DelegatorSlots(_ context.Context, d sdk.AccAddress) ([]string, error) {
@@ -341,4 +351,105 @@ func TestCaps_AHeldValidatorAddedAgainInTheTxIsNotCountedTwice(t *testing.T) {
 		delegate(d, valAddr(1), 100),
 		delegate(d, valAddr(4), 100),
 	), "two held slots plus one new one is three")
+}
+
+// acmeKeeper: ample global and validator room; val(1)..val(3) and val(7) are
+// members of acme, which holds 9,000 SCN against a 10,000 SCN cap. val(9) is no
+// entity's.
+func acmeKeeper() *fakeKeeper {
+	k := newKeeper()
+	k.headroom = nscn(1_000_000)
+	k.vcap = nscn(1_000_000)
+	k.standings = map[string]types.EntityStanding{}
+	for _, b := range []byte{1, 2, 3, 7} {
+		k.standings[valAddr(b).String()] = types.EntityStanding{EntityID: "acme", Tokens: nscn(9_000), Cap: nscn(10_000)}
+	}
+	return k
+}
+
+func redelegate(from sdk.AccAddress, src, dst sdk.ValAddress, amt int64) sdk.Msg {
+	return &stakingtypes.MsgBeginRedelegate{
+		DelegatorAddress: from.String(), ValidatorSrcAddress: src.String(), ValidatorDstAddress: dst.String(), Amount: coin(amt),
+	}
+}
+
+func TestCaps_EntityAggregateCapsADelegation(t *testing.T) {
+	require.ErrorIs(t, run(acmeKeeper(), delegate(accAddr(2), valAddr(1), 2_000)), types.ErrEntityCapReached)
+	require.NoError(t, run(acmeKeeper(), delegate(accAddr(2), valAddr(1), 1_000)), "9,000 + 1,000 is exactly the cap")
+	require.NoError(t, run(acmeKeeper(), delegate(accAddr(2), valAddr(9), 2_000)), "a validator with no entity is under its own cap only")
+}
+
+func TestCaps_EntityTotalRunsAcrossMembersInOneTx(t *testing.T) {
+	require.ErrorIs(t, run(acmeKeeper(),
+		delegate(accAddr(2), valAddr(1), 600),
+		delegate(accAddr(3), valAddr(2), 600),
+	), types.ErrEntityCapReached, "each fits acme's 1,000 SCN of room alone; together they do not")
+	require.NoError(t, run(acmeKeeper(),
+		delegate(accAddr(2), valAddr(1), 500),
+		delegate(accAddr(3), valAddr(2), 500),
+	))
+}
+
+func TestCaps_AFrozenValidatorTakesNoStake(t *testing.T) {
+	k := acmeKeeper()
+	k.standings[valAddr(2).String()] = types.EntityStanding{
+		EntityID: "acme", Frozen: true, Reason: "too many seats", Tokens: nscn(9_000), Cap: nscn(10_000)}
+	require.ErrorIs(t, run(k, delegate(accAddr(2), valAddr(2), 100)), types.ErrEntityFrozen)
+	require.NoError(t, run(k, delegate(accAddr(2), valAddr(1), 100)), "the other members are not frozen")
+	require.NoError(t, run(k, undelegate(accAddr(2), valAddr(2), 100)), "a frozen validator may shrink")
+
+	k.standings[valAddr(8).String()] = types.EntityStanding{Frozen: true, Reason: "seat without attestation", Tokens: math.ZeroInt(), Cap: math.ZeroInt()}
+	require.ErrorIs(t, run(k, delegate(accAddr(2), valAddr(8), 100)), types.ErrEntityFrozen, "a frozen seat has no entity")
+}
+
+func TestCaps_CreateValidatorOfAPreAttestedMemberCountsAgainstTheEntity(t *testing.T) {
+	// val(7) does not exist yet (zero tokens), but acme already holds 9,000 SCN.
+	require.ErrorIs(t, run(acmeKeeper(), createValidator(valAddr(7), 2_000)), types.ErrEntityCapReached)
+	k := acmeKeeper()
+	k.standings[valAddr(7).String()] = types.EntityStanding{EntityID: "acme", Tokens: nscn(8_000), Cap: nscn(10_000)}
+	require.NoError(t, run(k, createValidator(valAddr(7), 2_000)))
+}
+
+// Review Focus 4.
+func TestCaps_RedelegationInsideOneEntityIsNotGrowth(t *testing.T) {
+	k := acmeKeeper()
+	for _, b := range []byte{1, 2} {
+		k.standings[valAddr(b).String()] = types.EntityStanding{EntityID: "acme", Tokens: nscn(10_000), Cap: nscn(10_000)}
+	}
+	require.NoError(t, run(k, redelegate(accAddr(2), valAddr(1), valAddr(2), 500)), "between two members of acme at its cap")
+
+	k.standings[valAddr(2).String()] = types.EntityStanding{
+		EntityID: "acme", Frozen: true, Reason: "r", Tokens: nscn(10_000), Cap: nscn(10_000)}
+	require.NoError(t, run(k, redelegate(accAddr(2), valAddr(1), valAddr(2), 500)), "a frozen member is no exception: nothing grows")
+
+	require.ErrorIs(t, run(k, redelegate(accAddr(2), valAddr(9), valAddr(1), 500)), types.ErrEntityCapReached,
+		"from a free validator into acme at its cap")
+	require.ErrorIs(t, run(k, redelegate(accAddr(2), valAddr(9), valAddr(2), 500)), types.ErrEntityFrozen)
+	k.standings[valAddr(9).String()] = types.EntityStanding{EntityID: "other", Tokens: nscn(1), Cap: nscn(10_000)}
+	require.ErrorIs(t, run(k, redelegate(accAddr(2), valAddr(9), valAddr(1), 500)), types.ErrEntityCapReached,
+		"from a member of another entity")
+}
+
+func TestCaps_RedelegationInsideOneEntityStillChecksTheValidatorCap(t *testing.T) {
+	k := acmeKeeper()
+	k.vcap = nscn(40_000)
+	k.tokens[valAddr(2).String()] = nscn(40_000)
+	require.ErrorIs(t, run(k, redelegate(accAddr(2), valAddr(1), valAddr(2), 500)), types.ErrValidatorCapReached)
+}
+
+func TestCaps_UndelegateThenDelegateInsideOneEntityIsRefusedAtTheCap(t *testing.T) {
+	k := acmeKeeper()
+	for _, b := range []byte{1, 2} {
+		k.standings[valAddr(b).String()] = types.EntityStanding{EntityID: "acme", Tokens: nscn(10_000), Cap: nscn(10_000)}
+	}
+	// The ante skips MsgBeginRedelegate only (spec §8.3).
+	require.ErrorIs(t, run(k,
+		undelegate(accAddr(2), valAddr(1), 500),
+		delegate(accAddr(2), valAddr(2), 500),
+	), types.ErrEntityCapReached)
+}
+
+func TestCaps_EntityCapHoldsThroughAuthz(t *testing.T) {
+	require.ErrorIs(t, run(acmeKeeper(), nestExec(delegate(accAddr(2), valAddr(1), 2_000), 1)), types.ErrEntityCapReached)
+	require.NoError(t, run(acmeKeeper(), nestExec(delegate(accAddr(2), valAddr(1), 1_000), 2)))
 }

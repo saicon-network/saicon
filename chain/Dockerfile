@@ -55,7 +55,8 @@ COPY --from=builder /out/licenses /usr/share/licenses/saicon
 COPY docker/IMAGE-LICENSES.txt /usr/share/licenses/saicon/README.txt
 RUN apk list --installed > /usr/share/licenses/saicon/alpine-packages.txt
 COPY docker/entrypoint-singlenode.sh /usr/local/bin/entrypoint-singlenode.sh
-RUN chmod +x /usr/local/bin/entrypoint-singlenode.sh
+COPY ./scripts/vrf-submit-loop.sh /usr/local/bin/vrf-submit-loop.sh
+RUN chmod +x /usr/local/bin/entrypoint-singlenode.sh /usr/local/bin/vrf-submit-loop.sh
 
 # Pre-create the node home owned by the runtime user. A fresh named volume
 # mounted here inherits this ownership, so the non-root user can write to it.

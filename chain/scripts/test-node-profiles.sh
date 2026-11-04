@@ -12,7 +12,7 @@
 #   - each profile's app.toml carries the values the policy specifies
 #
 # WHAT IT DOES NOT PROVE
-#   Pruning behaviour. A validator keeps 100,000 state versions and 362,880
+#   Pruning behaviour. A validator keeps 100,000 state versions and 302,400
 #   blocks, so on a chain a few hundred blocks old neither profile has pruned
 #   anything yet and their on-disk contents are identical by construction.
 #   Proving the archive diverges from a validator needs a chain past the
@@ -21,7 +21,7 @@ set -uo pipefail
 
 VALIDATOR_PORTS=(26657 26658 26659)
 ARCHIVE_PORT=26660
-EVIDENCE_BLOCKS=362880          # 21 days at a 5s block, matches the entrypoints
+EVIDENCE_BLOCKS=302400          # 21 days / 6s, matches the entrypoints
 fails=0
 checks=0
 

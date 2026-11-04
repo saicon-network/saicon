@@ -1,0 +1,98 @@
+syntax = "proto3";
+package chain.entityregistry.v1;
+
+import "amino/amino.proto";
+import "chain/entityregistry/v1/params.proto";
+import "chain/entityregistry/v1/types.proto";
+import "cosmos/base/query/v1beta1/pagination.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/entityregistry/types";
+
+// Query defines the gRPC querier service.
+service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/saicon/chain/entityregistry/v1/params";
+  }
+  rpc Entities(QueryEntitiesRequest) returns (QueryEntitiesResponse) {
+    option (google.api.http).get = "/saicon/chain/entityregistry/v1/entities";
+  }
+  rpc Entity(QueryEntityRequest) returns (QueryEntityResponse) {
+    option (google.api.http).get = "/saicon/chain/entityregistry/v1/entities/{entity_id}";
+  }
+  // ValidatorEntity answers "which entity does this validator belong to" (W3).
+  rpc ValidatorEntity(QueryValidatorEntityRequest) returns (QueryValidatorEntityResponse) {
+    option (google.api.http).get = "/saicon/chain/entityregistry/v1/validators/{validator}/entity";
+  }
+  // Tickets lists one ticket per attested entity (ADR-0014 D3).
+  rpc Tickets(QueryTicketsRequest) returns (QueryTicketsResponse) {
+    option (google.api.http).get = "/saicon/chain/entityregistry/v1/tickets";
+  }
+  // VrfKey shows a validator's standing key offer and the key bound on its member row.
+  rpc VrfKey(QueryVrfKeyRequest) returns (QueryVrfKeyResponse) {
+    option (google.api.http).get = "/saicon/chain/entityregistry/v1/validators/{validator}/vrf-key";
+  }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message QueryEntitiesRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+message QueryEntitiesResponse {
+  repeated Entity entities = 1 [(gogoproto.nullable) = false];
+  cosmos.base.query.v1beta1.PageResponse pagination = 2;
+}
+
+message QueryEntityRequest {
+  string entity_id = 1;
+}
+
+message QueryEntityResponse {
+  Entity entity = 1 [(gogoproto.nullable) = false];
+  repeated Member members = 2 [(gogoproto.nullable) = false];
+  uint32 active_seats = 3;
+}
+
+message QueryValidatorEntityRequest {
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+}
+
+message QueryValidatorEntityResponse {
+  bool attested = 1;
+  string entity_id = 2;
+  // frozen is null unless the validator holds a frozen seat.
+  FrozenSeat frozen = 3;
+  // pending is true when the activation gate holds the validator.
+  bool pending = 4;
+}
+
+message QueryTicketsRequest {}
+
+message QueryTicketsResponse {
+  repeated Ticket tickets = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryVrfKeyRequest {
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+}
+
+message QueryVrfKeyResponse {
+  // offer is null when the validator's operator has offered no key.
+  VrfKeyOffer offer = 1;
+  // entity_id, vrf_public_key and vrf_key_height describe the member row; empty
+  // or zero when the validator is not a member or has no bound key.
+  string entity_id = 2;
+  string vrf_public_key = 3;
+  int64 vrf_key_height = 4;
+}

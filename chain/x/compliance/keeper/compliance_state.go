@@ -16,6 +16,7 @@ import (
 // compliance-triggered status transition (chain/docs/validators/README.md §4.2):
 //
 //   - non-compliant + CRITICAL_VIOLATION → jail
+//   - non-compliant + COORDINATED_ATTACK → jail (a sanction is not a quarantine)
 //   - non-compliant + other events       → quarantine
 //   - restored (compliant)               → back to active (from quarantined)
 //
@@ -80,7 +81,8 @@ func (k Keeper) applyStatusTransition(
 
 	var target vrtypes.Status
 	if !compliant {
-		if event == types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_CRITICAL_VIOLATION {
+		if event == types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_CRITICAL_VIOLATION ||
+			event == types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_COORDINATED_ATTACK {
 			target = vrtypes.Status_STATUS_JAILED
 		} else {
 			target = vrtypes.Status_STATUS_QUARANTINED

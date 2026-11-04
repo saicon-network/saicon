@@ -1,0 +1,8 @@
+HTTP/1.1 404 Not Found
+Content-Type: application/json
+Grpc-Metadata-Content-Type: application/grpc+cosmos-sdk-grpc-codec
+Grpc-Metadata-X-Cosmos-Block-Height: 50
+X-Server-Time: 1793251307
+Date: Thu, 29 Oct 2026 05:21:47 GMT
+Content-Length: 70
+

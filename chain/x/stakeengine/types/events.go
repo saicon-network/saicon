@@ -14,5 +14,6 @@ const (
 	AttributeKeyEpoch             = "epoch"
 	AttributeKeyGlobalCap         = "global_cap"
 	AttributeKeyValidatorCap      = "validator_cap"
+	AttributeKeyEntityCap         = "entity_cap"
 	AttributeKeyPublicCirculating = "public_circulating"
 )

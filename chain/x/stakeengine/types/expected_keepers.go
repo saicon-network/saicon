@@ -9,6 +9,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
+	entityregistrytypes "github.com/saicon-network/saicon/chain/x/entityregistry/types"
 	participationtypes "github.com/saicon-network/saicon/chain/x/participation/types"
 	validatorregistrytypes "github.com/saicon-network/saicon/chain/x/validatorregistry/types"
 )
@@ -47,4 +48,15 @@ type ParticipationKeeper interface {
 type ValidatorregistryKeeper interface {
 	GetValidatorStatus(ctx context.Context, addr sdk.ValAddress) (validatorregistrytypes.Status, bool, error)
 	SelfStakeLockup(ctx context.Context, valAddr sdk.ValAddress) (locked bool, unlockAt time.Time, err error)
+}
+
+// EntityregistryKeeper is what the stake engine reads from x/entityregistry.
+type EntityregistryKeeper interface {
+	EntityOf(ctx context.Context, val sdk.ValAddress) (entityregistrytypes.Member, bool, error)
+	MemberValidators(ctx context.Context, entityID string) ([]sdk.ValAddress, error)
+	ActiveSeats(ctx context.Context, entityID string) (uint32, error)
+	ChargedFrozenSeats(ctx context.Context, entityID string) ([]sdk.ValAddress, error)
+	MaxActiveSeats(ctx context.Context) (uint32, error)
+	IsFrozenSeat(ctx context.Context, val sdk.ValAddress) (bool, error)
+	AttestedEntityIDs(ctx context.Context) ([]string, error)
 }

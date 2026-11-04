@@ -121,6 +121,31 @@ func TestRecomputeCaps_GlobalCapEWMAAndValidatorCap(t *testing.T) {
 	require.Equal(t, uint64(1), st2.Epoch)
 }
 
+// The epoch's caps event carries every cap RecomputeCaps stored, the entity cap
+// (S8) included, so an indexer reads them without a state query.
+func TestRecomputeCaps_TheEventCarriesEveryCap(t *testing.T) {
+	f := newFixture(t)
+	st, err := f.k.RecomputeCaps(f.ctx, 0, true)
+	require.NoError(t, err)
+
+	attrs := map[string]string{}
+	for _, ev := range sdk.UnwrapSDKContext(f.ctx).EventManager().Events() {
+		if ev.Type != types.EventTypeStakeCapsComputed {
+			continue
+		}
+		for _, a := range ev.Attributes {
+			attrs[a.Key] = a.Value
+		}
+	}
+	require.Equal(t, map[string]string{
+		types.AttributeKeyEpoch:             "0",
+		types.AttributeKeyPublicCirculating: st.PublicCirculating.String(),
+		types.AttributeKeyGlobalCap:         st.GlobalCap.String(),
+		types.AttributeKeyValidatorCap:      st.ValidatorCap.String(),
+		types.AttributeKeyEntityCap:         st.EntityCap.String(),
+	}, attrs)
+}
+
 func TestRecomputeCaps_TheFloorRaisesTheValidatorCap(t *testing.T) {
 	f := newFixture(t)
 	p := types.DefaultParams()

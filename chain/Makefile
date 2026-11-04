@@ -71,7 +71,10 @@ SIM_DET_SEED   ?= 20260824
 # lock-up refuses it (c4ad849); two since S6 because the simulator creates
 # validators below the 2,000 SCN entry floor and delegates past the 2% cap, which
 # the stake-caps ante refuses. Correct refusals, and a real coverage gap until the
-# simulator has operations that know the rules.
+# simulator has operations that know the rules. It also pins the two slashing
+# fractions to the values the binary's default genesis sets (ADR-0010):
+# slash_fraction_double_sign 0.10 and slash_fraction_downtime 0, which x/slashing's
+# randomised genesis would otherwise draw.
 SIM_FLAGS = -Enabled=true -NumBlocks=$(SIM_NUM_BLOCKS) -BlockSize=$(SIM_BLOCK_SIZE) \
             -Commit=true -Period=1 -Params=sim_params.json -v -timeout 24h
 

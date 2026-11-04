@@ -17,6 +17,7 @@ import (
 	"github.com/saicon-network/saicon/chain/x/delegationrouter/keeper"
 	"github.com/saicon-network/saicon/chain/x/delegationrouter/types"
 	participationtypes "github.com/saicon-network/saicon/chain/x/participation/types"
+	setypes "github.com/saicon-network/saicon/chain/x/stakeengine/types"
 	vrtypes "github.com/saicon-network/saicon/chain/x/validatorregistry/types"
 )
 
@@ -48,6 +49,9 @@ type stubEngine struct {
 	min      math.Int
 	epoch    uint64
 	queued   []enqueued
+	// standings: a validator's entity standing, key string(val bytes); absent
+	// means no entity and not frozen.
+	standings map[string]setypes.EntityStanding
 }
 
 func (e *stubEngine) Headroom(context.Context) (math.Int, error)     { return e.headroom, nil }
@@ -61,6 +65,12 @@ func (e *stubEngine) DelegatorSlots(_ context.Context, d sdk.AccAddress) ([]stri
 func (e *stubEngine) MaxValidatorsPerDelegator(context.Context) (uint32, error) { return e.max, nil }
 func (e *stubEngine) MinDelegation(context.Context) (math.Int, error)           { return e.min, nil }
 func (e *stubEngine) LatestEpoch(context.Context) (uint64, error)               { return e.epoch, nil }
+func (e *stubEngine) EntityStanding(_ context.Context, v sdk.ValAddress) (setypes.EntityStanding, error) {
+	if s, ok := e.standings[string(v)]; ok {
+		return s, nil
+	}
+	return setypes.EntityStanding{Tokens: math.ZeroInt(), Cap: math.ZeroInt()}, nil
+}
 func (e *stubEngine) EnqueueRouted(_ context.Context, d sdk.AccAddress, v sdk.ValAddress, amt math.Int) (uint64, error) {
 	id := uint64(len(e.queued) + 1)
 	e.queued = append(e.queued, enqueued{delegator: d, validator: v, amount: amt, id: id})
@@ -150,6 +160,7 @@ func newFixture(t *testing.T) *fixture {
 	engine := &stubEngine{
 		headroom: nscn(10_000_000), vcap: nscn(1_000_000),
 		tokens: map[string]math.Int{}, slots: map[string][]string{}, max: 3, min: nscn(100), epoch: 7,
+		standings: map[string]setypes.EntityStanding{},
 	}
 	stk := &stubStaking{engine: engine, validators: map[string]stakingtypes.Validator{}}
 	part := &stubParticipation{scores: map[string]math.LegacyDec{}}
@@ -183,4 +194,21 @@ func (f *fixture) addVal(b byte, tokens int64, score string) sdk.ValAddress {
 // room sets a validator's tokens so that it has exactly `room` SCN under the cap.
 func (f *fixture) room(v sdk.ValAddress, room int64) {
 	f.engine.tokens[string(v)] = f.engine.vcap.Sub(nscn(room))
+}
+
+// entity puts v in entity id with exactly `room` SCN left under the entity cap.
+func (f *fixture) entity(v sdk.ValAddress, id string, room int64) {
+	capN := nscn(1_000_000)
+	f.engine.standings[string(v)] = setypes.EntityStanding{EntityID: id, Tokens: capN.Sub(nscn(room)), Cap: capN}
+}
+
+// freeze marks v frozen (its entity is over the seat limit, or it holds a
+// frozen seat), keeping any entity standing already set.
+func (f *fixture) freeze(v sdk.ValAddress) {
+	s, ok := f.engine.standings[string(v)]
+	if !ok {
+		s = setypes.EntityStanding{Tokens: math.ZeroInt(), Cap: math.ZeroInt()}
+	}
+	s.Frozen = true
+	f.engine.standings[string(v)] = s
 }

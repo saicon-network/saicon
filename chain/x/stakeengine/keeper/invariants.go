@@ -48,3 +48,36 @@ func (k Keeper) EscrowInvariant(ctx context.Context) (string, bool) {
 	}
 	return "", false
 }
+
+// EntityLimitsInvariant is V-13, entity limits: for every attested entity the
+// active seats are at most max_active_seats and the aggregate stake is at most
+// the entity cap. It is checked in tests and reported by the entity-stake query
+// and is never run from EndBlock: a governance decrease, a base move or a merge
+// legitimately leaves an entity above a limit, frozen and not shed (spec §16).
+func (k Keeper) EntityLimitsInvariant(ctx context.Context) (string, bool) {
+	ids, err := k.entityKeeper.AttestedEntityIDs(ctx)
+	if err != nil {
+		return fmt.Sprintf("V-13: cannot read the entities: %v", err), true
+	}
+	limit, err := k.entityKeeper.MaxActiveSeats(ctx)
+	if err != nil {
+		return fmt.Sprintf("V-13: cannot read the seat limit: %v", err), true
+	}
+	for _, id := range ids {
+		seats, err := k.entityKeeper.ActiveSeats(ctx, id)
+		if err != nil {
+			return fmt.Sprintf("V-13: cannot read the seats of entity %s: %v", id, err), true
+		}
+		if seats > limit {
+			return fmt.Sprintf("V-13 broken: entity %s holds %d active seats, above %d", id, seats, limit), true
+		}
+		s, err := k.standingOfEntity(ctx, id)
+		if err != nil {
+			return fmt.Sprintf("V-13: cannot read the standing of entity %s: %v", id, err), true
+		}
+		if s.Tokens.GT(s.Cap) {
+			return fmt.Sprintf("V-13 broken: entity %s's aggregate stake %s exceeds its cap %s", id, s.Tokens, s.Cap), true
+		}
+	}
+	return "", false
+}

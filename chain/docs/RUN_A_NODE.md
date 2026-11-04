@@ -1,6 +1,6 @@
 # Run an SAiCoN node
 
-Operator guide for the **SAiCoN Chain** (binary `saicond`, denom `nscn` — 1 SCN = 100,000,000 nscn, bech32 prefix `saicon`, Cosmos SDK v0.53.6 / CometBFT).
+Operator guide for the **SAiCoN Chain** (binary `saicond`, denom `nscn` — 1 SCN = 100,000,000 nscn, bech32 prefix `saicon`, Cosmos SDK v0.53.8 / CometBFT).
 
 Three supported ways to run:
 - **Pre-built release archive** (easiest — `docker load` + `docker compose up`, no source build).

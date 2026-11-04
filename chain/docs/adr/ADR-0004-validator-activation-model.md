@@ -29,6 +29,18 @@ contradicted §3 on whether the self-stake lock-up gates activation or unbonding
 - The delegation-router enforcement ADR previously sketched as "ADR-0004" is
   renumbered to ADR-0005 (roadmap M2-A).
 
+## Superseded in part (S8)
+
+[ADR-0014](ADR-0014-entity-registry.md) changes three clauses of the decision above.
+Activation on bond now passes the entity registry's gate: a validator that is not a member of an
+attested entity, or whose entity already holds its ACTIVE seats, is **held** at BONDING instead of
+becoming ACTIVE. Auto-create of an unknown validator therefore no longer implies ACTIVE, and
+genesis validators become ACTIVE only when their genesis carries an attested entity. Held
+validators are promoted by a bounded EndBlock pass over held validators only, which is not the
+full scan rejected below: it never walks the whole set, and an attestation is its trigger. The
+governed restores (`MsgClearFlag`, `MsgUnjail`) pass the same gate. The lock-up and the
+JAILED / QUARANTINED / UNBONDING / INACTIVE rules are unchanged.
+
 ## Alternatives considered
 - EndBlock scan to promote bonded validators: rejected (O(N) every block; a hook
   fires only on the bonding event).

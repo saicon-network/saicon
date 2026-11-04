@@ -14,7 +14,8 @@ type Candidate struct {
 	OperatorBytes []byte
 	Score         math.LegacyDec // computed_score of the last closed epoch
 	Tokens        math.Int
-	Room          math.Int // validator_cap − tokens, > 0
+	Room          math.Int // min(validator room, entity room), > 0
+	Entity        string   // the attested entity, or empty
 }
 
 // Leg is an amount for one validator.
@@ -42,22 +43,29 @@ func order(cs []Candidate) []Candidate {
 	return out
 }
 
-// Choose picks up to legs candidates by weight. A candidate the delegator
+// Choose picks up to legs candidates by weight, at most one per non-empty
+// Entity (the heaviest of an entity's candidates). A candidate the delegator
 // already holds (held[operator]) is always allowed; at most free others are.
 func Choose(cs []Candidate, held map[string]bool, free uint32, legs uint32) []Candidate {
 	var out []Candidate
 	var added uint32
+	taken := map[string]bool{}
 	for _, c := range order(cs) {
 		if uint32(len(out)) >= legs {
 			break
 		}
+		if c.Entity != "" && taken[c.Entity] {
+			continue
+		}
 		if held[c.Operator] {
 			out = append(out, c)
+			taken[c.Entity] = true
 			continue
 		}
 		if added < free {
 			out = append(out, c)
 			added++
+			taken[c.Entity] = true
 		}
 	}
 	return out

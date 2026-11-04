@@ -88,3 +88,68 @@ CREATE TABLE IF NOT EXISTS epochs_read (
     completed_at TEXT NOT NULL,
     PRIMARY KEY (chain_id, epoch)
 );
+
+-- Concentration dashboard (S8 W4). New tables only: an existing database gains
+-- them through CREATE TABLE IF NOT EXISTS, with no ALTER.
+
+-- One row per measured or unmeasurable epoch: the cursor of the concentration pass.
+CREATE TABLE IF NOT EXISTS concentration_epochs (
+    chain_id             TEXT NOT NULL,
+    epoch                INTEGER NOT NULL,
+    height               INTEGER NOT NULL,   -- the epoch's last block, where everything was read
+    block_hash           TEXT,               -- NULL when the node no longer had it
+    power_unavailable    TEXT,               -- NULL when read; else a §5 code
+    set_size             INTEGER,
+    total_power          INTEGER,
+    top10_power          INTEGER,
+    nakamoto_validators  INTEGER,
+    entities_unavailable TEXT,               -- NULL when read; else a §5 code
+    unit_count           INTEGER,
+    nakamoto_entities    INTEGER,
+    entity_count         INTEGER,            -- rows in entity_snapshots for this epoch
+    entity_cap           TEXT,               -- cap_state.entity_cap at H, nscn
+    max_active_seats     INTEGER,            -- x/entityregistry params at H
+    read_at              TEXT NOT NULL,
+    PRIMARY KEY (chain_id, epoch)
+);
+
+CREATE TABLE IF NOT EXISTS power_snapshots (
+    chain_id  TEXT NOT NULL,
+    epoch     INTEGER NOT NULL,
+    cons_addr TEXT NOT NULL,                 -- upper-case hex, as CometBFT writes it
+    operator  TEXT,                          -- NULL: x/staking had no validator with that key at H, or its state at H is pruned
+    power     INTEGER NOT NULL,
+    unit      TEXT,                          -- NULL when the entity part is unavailable
+    PRIMARY KEY (chain_id, epoch, cons_addr)
+);
+
+CREATE TABLE IF NOT EXISTS entity_snapshots (
+    chain_id         TEXT NOT NULL,
+    epoch            INTEGER NOT NULL,
+    entity_id        TEXT NOT NULL,
+    display_name     TEXT NOT NULL,
+    status           TEXT NOT NULL,          -- ENTITY_STATUS_ATTESTED | ENTITY_STATUS_REVOKED
+    attested_height  INTEGER,
+    tokens           TEXT,                   -- EntityStake, verbatim; NULL for a revoked entity
+    entity_cap       TEXT,
+    room             TEXT,
+    active_seats     INTEGER,                -- Entity.active_seats (members ACTIVE + charged)
+    max_active_seats INTEGER,
+    frozen           INTEGER,
+    frozen_reason    TEXT,
+    PRIMARY KEY (chain_id, epoch, entity_id)
+);
+
+CREATE TABLE IF NOT EXISTS entity_seats (
+    chain_id        TEXT NOT NULL,
+    epoch           INTEGER NOT NULL,
+    entity_id       TEXT NOT NULL,
+    operator        TEXT NOT NULL,
+    role            TEXT NOT NULL CHECK (role IN ('member', 'charged_frozen')),
+    registry_status TEXT,                    -- NULL: no registry record at H
+    tokens          TEXT,                    -- x/staking tokens at H
+    power           INTEGER,                 -- NULL: not in the consensus set at H
+    frozen_reason   TEXT,
+    frozen_height   INTEGER,
+    PRIMARY KEY (chain_id, epoch, entity_id, operator)
+);

@@ -36,6 +36,15 @@ func (k Keeper) ChangeStatus(ctx context.Context, addr sdk.ValAddress, newStatus
 			"%s -> %s not allowed", from.HumanString(), newStatus.HumanString())
 	}
 
+	// ADR-0014 D1: every path into ACTIVE — activation on bond, the resume after
+	// an aborted exit, MsgClearFlag, MsgUnjail — passes the entity registry's
+	// gate. A refusal leaves the record untouched.
+	if newStatus == types.Status_STATUS_ACTIVE && k.gate.g != nil {
+		if err := k.gate.g.MayActivate(ctx, addr); err != nil {
+			return err
+		}
+	}
+
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	// Normalised the same way as at creation and on import: baseapp reports the
 	// init-chain block as height 0, and a stored 0 cannot be told apart from "never

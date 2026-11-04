@@ -38,6 +38,10 @@ var (
 var (
 	HookRecordPrefix = []byte{0x01}
 	BeginBlockWindow = []byte{0x02}
+	// EntityOutflowPrefix keys the tokens a delegator took out of an entity's
+	// members earlier in the same transaction, which a later growth at a member of
+	// the same entity may use up (spec §8.3).
+	EntityOutflowPrefix = []byte{0x03}
 )
 
 // NonCirculatingModules are module accounts whose balances are not publicly owned

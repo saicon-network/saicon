@@ -303,3 +303,125 @@ func TestFillQueue_AFailedDelegateRevertsTheEscrowSend(t *testing.T) {
 	require.Equal(t, bonded, f.staking.bonded)
 	f.requireV10(t)
 }
+
+// entityQueueFixture: acme = val(1), val(2), with acc(3) and acc(4) funded to
+// queue 80 SCN each, val(1) the better-scored member, and an entity cap that leaves
+// the entity the given room. Global headroom and validator room are ample.
+func entityQueueFixture(t *testing.T, room int64) *fixture {
+	t.Helper()
+	f := newFixture(t)
+	f.devnetFloor(t)
+	f.staking.addValidator(val(2), nscn(100_000))
+	f.staking.addValidator(val(3), nscn(100_000))
+	f.caps(t)
+	f.part.scores[string(val(1))] = math.LegacyNewDecWithPrec(9, 1)
+	f.part.scores[string(val(2))] = math.LegacyNewDecWithPrec(5, 1)
+	f.part.scores[string(val(3))] = math.LegacyNewDecWithPrec(1, 1)
+	f.ent.members[string(val(1))] = "acme"
+	f.ent.members[string(val(2))] = "acme"
+	require.NoError(t, f.bank.move(acc(1), acc(3), nscn(1_000)))
+	require.NoError(t, f.bank.move(acc(1), acc(4), nscn(1_000)))
+	require.NoError(t, f.bank.move(acc(1), acc(5), nscn(1_000)))
+	s, err := f.k.EntityStanding(f.ctx, val(1))
+	require.NoError(t, err)
+	st, err := f.k.CapState.Get(f.ctx)
+	require.NoError(t, err)
+	st.EntityCap = s.Tokens.Add(nscn(room))
+	require.NoError(t, f.k.CapState.Set(f.ctx, st))
+	return f
+}
+
+// Review Focus 5: two entries for two members of one entity, each fitting alone,
+// together over the entity's room.
+func TestFillQueue_TwoEntriesForOneEntityFillOnlyTheCapsWorth(t *testing.T) {
+	f := entityQueueFixture(t, 100)
+	first, err := f.k.Enqueue(f.ctx, acc(3), val(1), nscn(80))
+	require.NoError(t, err)
+	second, err := f.k.Enqueue(f.ctx, acc(4), val(2), nscn(80))
+	require.NoError(t, err)
+	t1, t2 := f.tokens(t, 1), f.tokens(t, 2)
+
+	require.NoError(t, f.k.FillQueue(f.ctx))
+
+	_, ok := f.entry(t, first)
+	require.False(t, ok, "the first entry is filled in full")
+	e, ok := f.entry(t, second)
+	require.True(t, ok)
+	require.Equal(t, nscn(60), e.Amount, "only the 20 SCN left in acme's room was filled")
+	require.Equal(t, t1.Add(nscn(80)), f.tokens(t, 1))
+	require.Equal(t, t2.Add(nscn(20)), f.tokens(t, 2))
+	s, err := f.k.EntityStanding(f.ctx, val(1))
+	require.NoError(t, err)
+	require.True(t, s.Room().IsZero(), "the entity is exactly at its cap")
+	f.requireV10(t)
+
+	// The next pass finds no room: nothing more is filled, the entry keeps its place.
+	require.NoError(t, f.k.FillQueue(f.ctx))
+	e, ok = f.entry(t, second)
+	require.True(t, ok)
+	require.Equal(t, nscn(60), e.Amount)
+	f.requireV10(t)
+}
+
+func TestFillQueue_AnEntityOverItsCapGetsNothingAndOthersAreUnaffected(t *testing.T) {
+	f := entityQueueFixture(t, -1)
+	member, err := f.k.Enqueue(f.ctx, acc(3), val(1), nscn(80))
+	require.NoError(t, err)
+	other, err := f.k.Enqueue(f.ctx, acc(4), val(3), nscn(80))
+	require.NoError(t, err)
+	require.NoError(t, f.k.FillQueue(f.ctx))
+
+	e, ok := f.entry(t, member)
+	require.True(t, ok)
+	require.Equal(t, nscn(80), e.Amount)
+	_, ok = f.entry(t, other)
+	require.False(t, ok, "a validator with no entity is filled as before")
+	f.requireV10(t)
+}
+
+func TestFillQueue_AFrozenMembersEntryWaitsAndKeepsItsPlace(t *testing.T) {
+	f := entityQueueFixture(t, 1_000)
+	f.ent.seats["acme"] = 3 // above max 2: acme is frozen
+	frozen, err := f.k.Enqueue(f.ctx, acc(3), val(1), nscn(80))
+	require.NoError(t, err)
+	free, err := f.k.Enqueue(f.ctx, acc(4), val(3), nscn(80))
+	require.NoError(t, err)
+	require.NoError(t, f.k.FillQueue(f.ctx))
+
+	e, ok := f.entry(t, frozen)
+	require.True(t, ok)
+	require.Equal(t, nscn(80), e.Amount)
+	_, ok = f.entry(t, free)
+	require.False(t, ok)
+	f.requireV10(t)
+
+	f.ent.seats["acme"] = 2 // a seat frees: the entry fills, ahead of anything queued later
+	require.NoError(t, f.k.FillQueue(f.ctx))
+	_, ok = f.entry(t, frozen)
+	require.False(t, ok)
+	f.requireV10(t)
+}
+
+func TestFillQueue_TwoEntriesForOneMemberFillOnlyTheEntityRoom(t *testing.T) {
+	f := entityQueueFixture(t, 100)
+	first, err := f.k.Enqueue(f.ctx, acc(3), val(1), nscn(80))
+	require.NoError(t, err)
+	second, err := f.k.Enqueue(f.ctx, acc(4), val(1), nscn(80))
+	require.NoError(t, err)
+	third, err := f.k.Enqueue(f.ctx, acc(5), val(2), nscn(80))
+	require.NoError(t, err)
+	t1 := f.tokens(t, 1)
+
+	require.NoError(t, f.k.FillQueue(f.ctx))
+
+	_, ok := f.entry(t, first)
+	require.False(t, ok)
+	e, ok := f.entry(t, second)
+	require.True(t, ok)
+	require.Equal(t, nscn(60), e.Amount)
+	e, ok = f.entry(t, third)
+	require.True(t, ok)
+	require.Equal(t, nscn(80), e.Amount, "the entity is full")
+	require.Equal(t, t1.Add(nscn(100)), f.tokens(t, 1))
+	f.requireV10(t)
+}

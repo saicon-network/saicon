@@ -2,7 +2,9 @@
 # Rehearse joining a SAiCoN network, locally, the way three separate operators
 # would: node A starts the network; B and C each start an empty node, take the
 # network's genesis and a peer, sync, get tokens from someone who has them, and
-# register a validator. Everything runs in its own Docker network and volumes,
+# register a validator. From v0.10.0 a validator is held at BONDING until an
+# attestor attests its entity, so A's attestor key (the one the single-node
+# genesis creates) attests each new operator after it registers. Everything runs in its own Docker network and volumes,
 # publishes no host ports, and is removed at the end (KEEP=1 keeps it).
 #
 #   bash ./scripts/rehearse-join.sh             # uses the saicond:dev image
@@ -19,6 +21,8 @@ CHAIN_ID=saicon-rehearse-1
 H=/home/saicon/.saicon                 # the node home inside the image
 KR=(--keyring-backend test --home "$H")  # test keyring: a rehearsal, never real funds
 TX=(--chain-id "$CHAIN_ID" --fees 0nscn -y -o json)
+# create-validator uses 203,389 gas on v0.10.0, so the 200,000 default runs out; 600,000 leaves room.
+TXGAS=(--gas 600000)
 
 cleanup() {
   [ "${KEEP:-0}" = 1 ] && return
@@ -69,6 +73,7 @@ join() { # container moniker peers
 
 become_validator() { # container key moniker funder funderKey selfbond_nscn spare_nscn
   local c=$1 key=$2 m=$3 funder=$4 fkey=$5 bond=$6 spare=$7
+  local entity="rehearse-$m"   # entity id: lower case, digits, hyphens
   step "$m: a key, tokens from someone who has them, a validator"
   local addr; addr=$(docker exec "$c" saicond keys add "$key" "${KR[@]}" --output json 2>/dev/null | jq -r .address)
   local fund=$((bond + spare))
@@ -81,13 +86,22 @@ become_validator() { # container key moniker funder funderKey selfbond_nscn spar
  \"commission-rate\": \"0.05\", \"commission-max-rate\": \"0.20\",
  \"commission-max-change-rate\": \"0.01\", \"min-self-delegation\": \"1\"}
 EOF"
-  out=$(docker exec "$c" saicond tx staking create-validator "$H/validator.json" --from "$key" "${TX[@]}" "${KR[@]}")
+  out=$(docker exec "$c" saicond tx staking create-validator "$H/validator.json" --from "$key" "${TX[@]}" "${TXGAS[@]}" "${KR[@]}")
   [ "$(jq -r .code <<<"$out")" = 0 ] || fail "create-validator for $m: $(jq -r .raw_log <<<"$out")"
   wait_tx; tx_ok "$c" "$(jq -r .txhash <<<"$out")"
   local val; val=$(docker exec "$c" saicond keys show "$key" --bech val -a "${KR[@]}")
   st=$(docker exec "$c" saicond q validatorregistry validator "$val" --home "$H" -o json | jq -r .validator.status)
-  [ "$st" = STATUS_ACTIVE ] || fail "$m registry status is $st"
-  ok "$m is a validator: $val, registry status $st"
+  # Bonded in consensus but not attested: the gate holds it out of the PoP set.
+  [ "$st" = STATUS_BONDING ] || fail "$m should be held at STATUS_BONDING until attested, registry status is $st"
+  ok "$m is bonded and held at $st until its entity is attested"
+  # The attestor (a key on node A, listed in the genesis params) attests a one-validator entity.
+  local hash; hash=$(printf 'rehearsal attestation for %s' "$m" | shasum -a 256 | cut -d' ' -f1)
+  local ah; ah=$(docker exec rj-a saicond tx entityregistry attest "$entity" "$m operator" "$hash" "$val" \
+    --from attestor "${TX[@]}" "${KR[@]}" | jq -r .txhash)
+  wait_tx; tx_ok rj-a "$ah"
+  st=$(docker exec "$c" saicond q validatorregistry validator "$val" --home "$H" -o json | jq -r .validator.status)
+  [ "$st" = STATUS_ACTIVE ] || fail "$m registry status is $st after its entity was attested"
+  ok "$m is a validator: $val, entity $entity attested, registry status $st"
 }
 
 join rj-b node-b "$A_ID@rj-a:26656"
@@ -99,7 +113,7 @@ pk=$(docker exec rj-b saicond comet show-validator --home "$H")
 docker exec rj-b sh -c "cat > $H/low.json <<EOF
 {\"pubkey\": $pk, \"amount\": \"100000000000nscn\", \"moniker\": \"too-small\", \"commission-rate\": \"0.05\", \"commission-max-rate\": \"0.20\", \"commission-max-change-rate\": \"0.01\", \"min-self-delegation\": \"1\"}
 EOF"
-log=$(docker exec rj-b saicond tx staking create-validator "$H/low.json" --from probe "${TX[@]}" "${KR[@]}" 2>&1 || true)
+log=$(docker exec rj-b saicond tx staking create-validator "$H/low.json" --from probe "${TX[@]}" "${TXGAS[@]}" "${KR[@]}" 2>&1 || true)
 grep -q "entry floor" <<<"$log" && ok "refused: entry floor (2,000 SCN of its own)" || fail "a 1,000 SCN validator was not refused: $log"
 
 become_validator rj-b operator-b node-b rj-a validator 1000000000000 300000000000   # 10,000 SCN bonded, 3,000 to spare

@@ -1,11 +1,14 @@
 # ADR-0013: Bounded DAO authority — what governance may tune, and what it may never reach
 
-Status: **Proposed** (2026-08-15) — see [DEVELOPMENT.md](../DEVELOPMENT.md) §2.10.
+Status: **Proposed** (2026-08-15) — see [DEVELOPMENT.md](../DEVELOPMENT.md) §2.10. **D5 accepted and
+implemented** in S8 (`v0.10.0`) with the coordinated-attack sanction (ADR-0010 §3, project decision
+D-S8-2); the open problems below are not. The parameters S8 added — entity registry, entity cap,
+randomness, coordinated attack — are placed in the D2 tables as `v0.10.0` enforces them.
 Source: **Decision Register v1.0** (adopted 2026-07-24), §2.10; every tier assignment below
 was read from the source at `44a83fe`, not from the Register's prose.
 Related: [ADR-0011](ADR-0011-emission-and-single-mint-path.md) (single mint path, supply
 ceiling), [ADR-0010](ADR-0010-slashing-policy.md) (slashing, tombstone),
-[ADR-0012](ADR-0012-caps-and-stake-engine.md) (caps), ADR-0014 (entity registry).
+[ADR-0012](ADR-0012-caps-and-stake-engine.md) (caps), [ADR-0014](ADR-0014-entity-registry.md) (entity registry).
 
 ## Context
 
@@ -51,6 +54,10 @@ to move them is to ship a new binary:
 | Self-stake lock-up floor, 60 days | `x/validatorregistry/types/keys.go` — `DefaultLockupDurationSeconds`; registration rejects anything shorter |
 | Runtime invariants V-1…V-9 | `EndBlock` assertions that panic; a breach halts the chain rather than logging |
 | Tombstone | the SDK's, and no message in this chain clears it |
+| Coordinated-attack bounds (S8) | `x/compliance/types/params.go` — `CoordinatedFractionFloor() = 0.10`, `CoordinatedFractionCeiling() = 1.00`, `MinAppealWindowSeconds = 86,400`, `MaxAppealWindowSeconds = 1,209,600`; `MaxEvidenceHashesPerSanction = 16` in the same file; `types/hash.go` — the evidence hash format (64 uppercase hex) |
+| Entity registry structure (S8) | `x/entityregistry/types/keys.go` — `MaxMembersPerEntity = 8`; one lottery ticket per attested entity; the activation gate itself, which no parameter turns off |
+| Randomness constants (S8) | `x/randomness/types/keys.go` — the 2/3 quorum (`QuorumNumerator = 2`, `QuorumDenominator = 3`), `ShadowLotterySeats = 22`, `MaxDrawHistory = 52`; the verification gas, the suite (ECVRF-EDWARDS25519-SHA512-ELL2) and the formats of the alpha, the seed and the draw |
+| Coordinated-attack arming rule (S8) | `x/compliance/keeper/offences.go` (`recordOffence`, `CaseOf`) — duplicate votes of at least two distinct validators linked to one entity, nothing else: no K-of-W path, no window, no count across entities, no input from a risk score |
 
 Worth stating plainly, because it is the strongest fact in this document: **`x/validatorregistry`
 has no `Params` fields at all.** The entry floor and the lock-up the Register says governance may
@@ -65,8 +72,16 @@ them. That is tier 3 by construction rather than by discipline.
 | `x/rewards.budget_bonded_rate` | `[0, 1]` | `x/rewards/types/params.go` |
 | `x/rewards.budget_floor_rate` | `[0, 1]` | same |
 | `x/rewards.budget_ceiling_rate` | `[0, 1]`, and **≥ floor** | same — an inverted clip would emit the floor forever |
+| `x/compliance.coordinated_attack_fraction` (S8) | `[0.10, 1.00]` inclusive, default 0.30; and not below the chain's current `slash_fraction_double_sign` | `x/compliance/types/params.go` `Validate()` for the bounds; `MsgUpdateParams` and the firing plan for the double-sign floor (a stateful check, read from x/slashing); `MsgFireCoordinatedSanction.ValidateBasic` for the bounds again |
+| `x/compliance.appeal_window_seconds` (S8) | `[86,400, 1,209,600]` (1 to 14 days), default 604,800 | `x/compliance/types/params.go` `Validate()` |
+| `x/entityregistry.max_active_seats` (S8) | `[1, 3]`, default 2 | `x/entityregistry/types/params.go` `Validate()` |
+| `x/stakeengine.entity_cap_fraction` (S8) | `[0.02, 0.10]`, default 0.05, and not below `validator_cap_fraction` | `x/stakeengine/types/params.go` `Validate()` |
+| `x/stakeengine.entity_cap_floor` (S8) | `[validator_cap_floor, 5,250,000 SCN]`, default 0 (the genesis scripts set it to `validator_cap_floor`) | same |
+| `x/randomness.rotation_epochs` (S8) | `[1, 28]`, default 7 | `x/randomness/types/params.go` `Validate()`; a change applies from the next round |
+| `x/randomness.window_blocks` (S8) | `[10, 200,000]`, default 100 | same |
 
-**Tier 1 — free within the type.** `x/participation.epoch_length_blocks`,
+**Tier 1 — free within the type.** `x/entityregistry.attestors` (S8: at most 10, unique — a bound on
+the list's size, not on who is on it), `x/participation.epoch_length_blocks`,
 `x/rewards.blocks_per_year`, `x/rewards.enabled`, `x/compliance.unjail_cooldown_blocks`, and
 the SDK's own `staking.max_validators`, `staking.unbonding_time`, the slashing fractions, the
 consensus evidence window and the governance voting periods.
@@ -89,6 +104,22 @@ index that makes that cheap.
 Adding a bound, removing one, or moving a value out of `Params` is a code change and a binary
 upgrade. Governance cannot widen its own authority by proposal. This is the property that makes
 the word "bounded" mean anything.
+
+### D5 — Applying a bounded sanction is not an override
+
+DEVELOPMENT.md §2.10 says governance may not override slashing, and the coordinated-attack rule
+(ADR-0010 §3, S8) has governance fire a sanction. Without a sentence that separates the two, the
+rules read as contradictory. Firing a sanction **inside** the code-fixed bounds is an *application* of
+slashing policy: the policy is the rule, its bounds and its parameter, all set before the case, and
+the vote applies them to named evidence — a proposal that carries the evidence hashes, waits out the
+appeal window and executes at a fraction equal to the governed parameter. **Changing the bounds**, or
+**forgiving** a slash after the fact (a refund, a tombstone reset, an unjail of a tombstoned
+validator), is an *override* and stays forbidden; no message in this chain does either. The bounds are
+tier 3 (D4: moving them is a code change and a binary upgrade), and the two parameters that sit
+between them are tier 2, enforced where the parameter is (D3). Tests prove it: `Validate` refuses
+0.099999999999999999 and 1.000000000000000001, and real governance proposals that set the fraction
+below or above its bounds, or the appeal window to one hour, fail at execution and leave the
+parameters as they were.
 
 ## Open problem 1 (🚧) — three tier-1 parameters can switch off what the Register protects
 

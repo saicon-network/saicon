@@ -65,6 +65,13 @@ func (AppModule) RegisterInterfaces(registrar codectypes.InterfaceRegistry) {
 func (am AppModule) RegisterServices(registrar grpc.ServiceRegistrar) error {
 	types.RegisterMsgServer(registrar, keeper.NewMsgServerImpl(am.keeper))
 	types.RegisterQueryServer(registrar, keeper.NewQueryServerImpl(am.keeper))
+	// Store migrations ride on the configurator module.Manager passes as the
+	// registrar (cosmossdk.io/core v0.11 has no separate migrations interface).
+	if cfg, ok := registrar.(module.Configurator); ok {
+		if err := cfg.RegisterMigration(types.ModuleName, 1, keeper.NewMigrator(am.keeper).Migrate1to2); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -107,7 +114,7 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, _ codec.JSONCodec) json.RawMe
 }
 
 // ConsensusVersion is a sequence number for state-breaking change of the module.
-func (AppModule) ConsensusVersion() uint64 { return 1 }
+func (AppModule) ConsensusVersion() uint64 { return 2 }
 
 // EndBlock recomputes the caps on an epoch boundary, fills the queue, and
 // asserts V-10. The logic lives in Keeper.EndBlock so it is unit-tested there.

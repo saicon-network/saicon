@@ -139,6 +139,7 @@ func (k Keeper) RecomputeCaps(ctx context.Context, epoch uint64, first bool) (ty
 		GlobalCap:         types.GlobalCap(params, rewardstypes.MaxSupplyNscn(), pc),
 		EwmaBonded:        ewma,
 		ValidatorCap:      types.ValidatorCap(params, ewma),
+		EntityCap:         types.EntityCap(params, ewma),
 	}
 	if err := k.CapState.Set(ctx, st); err != nil {
 		return types.CapState{}, err
@@ -148,6 +149,7 @@ func (k Keeper) RecomputeCaps(ctx context.Context, epoch uint64, first bool) (ty
 		sdk.NewAttribute(types.AttributeKeyPublicCirculating, pc.String()),
 		sdk.NewAttribute(types.AttributeKeyGlobalCap, st.GlobalCap.String()),
 		sdk.NewAttribute(types.AttributeKeyValidatorCap, st.ValidatorCap.String()),
+		sdk.NewAttribute(types.AttributeKeyEntityCap, st.EntityCap.String()),
 	))
 	return st, nil
 }
@@ -196,6 +198,17 @@ func (k Keeper) ValidatorCap(ctx context.Context) (math.Int, error) {
 		return math.Int{}, err
 	}
 	return st.ValidatorCap, nil
+}
+
+// EntityCap is this epoch's per-entity cap, as stored. A read never differs from
+// the stored state: the backfill for a pre-v0.10 snapshot happens in
+// Migrate1to2 and InitGenesis only.
+func (k Keeper) EntityCap(ctx context.Context) (math.Int, error) {
+	st, err := k.capState(ctx)
+	if err != nil {
+		return math.Int{}, err
+	}
+	return st.EntityCap, nil
 }
 
 // ValidatorTokens is a validator's total tokens whatever its status (bonded,

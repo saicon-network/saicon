@@ -4,9 +4,9 @@ Run a single-node SAiCoN localnet **without compiling anything**. The only requi
 Docker with the Compose v2 plugin. This bundle ships a pre-built image, so there is no Go
 toolchain and no source build involved.
 
-SAiCoN (**S**ustainable **AI** **Co**mpute **N**etwork) is a Cosmos SDK v0.53.6 / CometBFT
-L1 with a Proof-of-Participation layer. Binary `saicond`, native denom `scn`, bech32 prefix
-`saicon`.
+SAiCoN (**S**ustainable **AI** **Co**mpute **N**etwork) is a Cosmos SDK v0.53.8 /
+CometBFT v0.38.25 L1 with a Proof-of-Participation layer. Binary `saicond`, base denom
+`nscn` (display `SCN` at exponent 8), bech32 prefix `saicon`.
 
 ## Contents
 
@@ -37,7 +37,7 @@ docker compose logs -f
 
 On first start the container initializes genesis (a `validator` key in the `test` keyring,
 a gentx, REST enabled, RPC/REST bound to `0.0.0.0`) and starts with
-`--minimum-gas-prices 0scn`. Chain ID: `saicon-localnet-1`. Blocks begin within ~10–20 s.
+`--minimum-gas-prices 0nscn`. Chain ID: `saicon-localnet-1`. Blocks begin within ~10–20 s.
 
 ## Verify
 
@@ -48,7 +48,7 @@ curl -s localhost:26657/health
 # Block height — run twice a few seconds apart; it should increase
 curl -s localhost:26657/status | grep latest_block_height
 
-# REST sanity (total supply, denominated in scn)
+# REST sanity (total supply, in base nscn; 1 SCN = 100,000,000 nscn)
 curl -s localhost:1317/cosmos/bank/v1beta1/supply
 ```
 

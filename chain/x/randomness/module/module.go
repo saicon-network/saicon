@@ -1,0 +1,131 @@
+package randomness
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"cosmossdk.io/core/appmodule"
+	"github.com/cosmos/cosmos-sdk/client"
+	"github.com/cosmos/cosmos-sdk/codec"
+	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	"github.com/cosmos/cosmos-sdk/types/module"
+	"github.com/grpc-ecosystem/grpc-gateway/runtime"
+	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
+
+	"github.com/saicon-network/saicon/chain/x/randomness/client/cli"
+	"github.com/saicon-network/saicon/chain/x/randomness/keeper"
+	"github.com/saicon-network/saicon/chain/x/randomness/types"
+)
+
+var (
+	_ module.AppModuleBasic = (*AppModule)(nil)
+	_ module.AppModule      = (*AppModule)(nil) //nolint:staticcheck // the legacy interface is what module.Manager still takes in SDK v0.53
+	_ module.HasGenesis     = (*AppModule)(nil)
+
+	_ appmodule.HasEndBlocker = (*AppModule)(nil)
+
+	_ appmodule.AppModule = (*AppModule)(nil)
+)
+
+// AppModule is the randomness module: per-validator VRF submissions, a chained
+// seed and a shadow draw that nothing reads (S8 W2 spec).
+type AppModule struct {
+	cdc    codec.Codec
+	keeper keeper.Keeper
+}
+
+// NewAppModule builds the module around its keeper.
+func NewAppModule(cdc codec.Codec, keeper keeper.Keeper) AppModule {
+	return AppModule{cdc: cdc, keeper: keeper}
+}
+
+// IsAppModule implements the appmodule.AppModule interface.
+func (AppModule) IsAppModule() {}
+
+// Name returns the name of the module as a string.
+func (AppModule) Name() string { return types.ModuleName }
+
+// RegisterLegacyAminoCodec registers the amino codec
+func (AppModule) RegisterLegacyAminoCodec(*codec.LegacyAmino) {}
+
+// GetTxCmd returns the module's transaction command with the hand-written
+// submit-vrf; autocli adds nothing else (UpdateParams is gov-gated).
+func (AppModule) GetTxCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:                        types.ModuleName,
+		Short:                      "Randomness transactions",
+		DisableFlagParsing:         true,
+		SuggestionsMinimumDistance: 2,
+		RunE:                       client.ValidateCmd,
+	}
+	cmd.AddCommand(cli.NewSubmitVrfCmd())
+	return cmd
+}
+
+// RegisterGRPCGatewayRoutes registers the gRPC Gateway routes for the module.
+func (AppModule) RegisterGRPCGatewayRoutes(clientCtx client.Context, mux *runtime.ServeMux) {
+	if err := types.RegisterQueryHandlerClient(clientCtx.CmdContext, mux, types.NewQueryClient(clientCtx)); err != nil {
+		panic(err)
+	}
+}
+
+// RegisterInterfaces registers a module's interface types and their concrete implementations as proto.Message.
+func (AppModule) RegisterInterfaces(registrar codectypes.InterfaceRegistry) {
+	types.RegisterInterfaces(registrar)
+}
+
+// RegisterServices registers the module's Msg and Query services.
+func (am AppModule) RegisterServices(registrar grpc.ServiceRegistrar) error {
+	types.RegisterMsgServer(registrar, keeper.NewMsgServerImpl(am.keeper))
+	types.RegisterQueryServer(registrar, keeper.NewQueryServerImpl(am.keeper))
+	return nil
+}
+
+// DefaultGenesis returns a default GenesisState for the module, marshalled to json.RawMessage.
+func (am AppModule) DefaultGenesis(codec.JSONCodec) json.RawMessage {
+	return am.cdc.MustMarshalJSON(types.DefaultGenesis())
+}
+
+// ValidateGenesis used to validate the GenesisState, given in its json.RawMessage form.
+func (am AppModule) ValidateGenesis(_ codec.JSONCodec, _ client.TxEncodingConfig, bz json.RawMessage) error {
+	var gs types.GenesisState
+	if err := am.cdc.UnmarshalJSON(bz, &gs); err != nil {
+		return fmt.Errorf("failed to unmarshal %s genesis state: %w", types.ModuleName, err)
+	}
+	return gs.Validate()
+}
+
+// InitGenesis performs the module's genesis initialization.
+func (am AppModule) InitGenesis(ctx sdk.Context, _ codec.JSONCodec, bz json.RawMessage) {
+	var gs types.GenesisState
+	if err := am.cdc.UnmarshalJSON(bz, &gs); err != nil {
+		panic(fmt.Errorf("failed to unmarshal %s genesis state: %w", types.ModuleName, err))
+	}
+	if err := am.keeper.InitGenesis(ctx, gs); err != nil {
+		panic(fmt.Errorf("failed to initialize %s genesis state: %w", types.ModuleName, err))
+	}
+}
+
+// ExportGenesis returns the module's exported genesis state as raw JSON bytes.
+func (am AppModule) ExportGenesis(ctx sdk.Context, _ codec.JSONCodec) json.RawMessage {
+	gs, err := am.keeper.ExportGenesis(ctx)
+	if err != nil {
+		panic(fmt.Errorf("failed to export %s genesis state: %w", types.ModuleName, err))
+	}
+	bz, err := am.cdc.MarshalJSON(gs)
+	if err != nil {
+		panic(fmt.Errorf("failed to marshal %s genesis state: %w", types.ModuleName, err))
+	}
+	return bz
+}
+
+// ConsensusVersion is a sequence number for state-breaking change of the module.
+func (AppModule) ConsensusVersion() uint64 { return 1 }
+
+// EndBlock advances the round state machine. The logic lives in
+// Keeper.EndBlock, which always returns nil: an EndBlock error would halt the
+// chain.
+func (am AppModule) EndBlock(ctx context.Context) error { return am.keeper.EndBlock(ctx) }

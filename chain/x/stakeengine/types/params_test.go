@@ -83,6 +83,8 @@ func TestParamsBounds(t *testing.T) {
 		p.PublicCirculatingFraction = math.LegacyNewDecWithPrec(30, 2)
 		p.ValidatorCapFraction = math.LegacyNewDecWithPrec(5, 2)
 		p.ValidatorCapFloor = math.NewInt(2_100_000 * scn)
+		p.EntityCapFloor = math.NewInt(2_100_000 * scn)        // must be ≥ the validator floor
+		p.EntityCapFraction = math.LegacyNewDecWithPrec(10, 2) // the upper bound; ≥ the 0.05 validator fraction set above
 		p.EwmaWindowEpochs = 365
 		p.MaxQueueEntries = 100_000
 		p.MaxFillsPerBlock = 500
@@ -141,6 +143,50 @@ func TestS7ParamBounds(t *testing.T) {
 		{"min 1 SCN", func(p *types.Params) { p.MinDelegation = math.NewInt(scn) }, true},
 		{"min 10,000 SCN", func(p *types.Params) { p.MinDelegation = math.NewInt(10_000 * scn) }, true},
 		{"min above 10,000 SCN", func(p *types.Params) { p.MinDelegation = math.NewInt(10_000*scn + 1) }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := types.DefaultParams()
+			tc.mut(&p)
+			if tc.ok {
+				require.NoError(t, p.Validate())
+			} else {
+				require.Error(t, p.Validate())
+			}
+		})
+	}
+}
+
+func TestEntityCapDefaultsAndBounds(t *testing.T) {
+	p := types.DefaultParams()
+	require.Equal(t, math.LegacyNewDecWithPrec(5, 2), p.EntityCapFraction)
+	require.True(t, p.EntityCapFloor.IsZero())
+	require.NoError(t, p.Validate())
+	scn := int64(100_000_000)
+	for _, tc := range []struct {
+		name string
+		mut  func(*types.Params)
+		ok   bool
+	}{
+		{"fraction nil", func(p *types.Params) { p.EntityCapFraction = math.LegacyDec{} }, false},
+		{"fraction 0.019", func(p *types.Params) { p.EntityCapFraction = math.LegacyNewDecWithPrec(19, 3) }, false},
+		{"fraction 0.02", func(p *types.Params) { p.EntityCapFraction = math.LegacyNewDecWithPrec(2, 2) }, true},
+		{"fraction 0.10", func(p *types.Params) { p.EntityCapFraction = math.LegacyNewDecWithPrec(10, 2) }, true},
+		{"fraction 0.101", func(p *types.Params) { p.EntityCapFraction = math.LegacyNewDecWithPrec(101, 3) }, false},
+		{"fraction below the validator's", func(p *types.Params) {
+			p.ValidatorCapFraction = math.LegacyNewDecWithPrec(4, 2)
+			p.EntityCapFraction = math.LegacyNewDecWithPrec(3, 2)
+		}, false},
+		{"floor nil", func(p *types.Params) { p.EntityCapFloor = math.Int{} }, false},
+		{"floor below the validator floor", func(p *types.Params) {
+			p.ValidatorCapFloor = math.NewInt(400_000 * scn)
+			p.EntityCapFloor = math.NewInt(399_999 * scn)
+		}, false},
+		{"floor equal to the validator floor", func(p *types.Params) {
+			p.ValidatorCapFloor = math.NewInt(400_000 * scn)
+			p.EntityCapFloor = math.NewInt(400_000 * scn)
+		}, true},
+		{"floor 5,250,000 SCN", func(p *types.Params) { p.EntityCapFloor = math.NewInt(5_250_000 * scn) }, true},
+		{"floor above", func(p *types.Params) { p.EntityCapFloor = math.NewInt(5_250_000*scn + 1) }, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := types.DefaultParams()

@@ -12,7 +12,7 @@ staying compliant, being reliable), not only for the stake behind them.
 
 ## Status
 
-**v0.9.1 is a DevNet release.** The Proof of Participation cycle runs end to end: scores and
+**v0.10.0 is a DevNet release.** The Proof of Participation cycle runs end to end: scores and
 Empirical Points are computed and paid every epoch, and six invariants are checked every block and
 halt the chain if one is violated. Delegation routes itself: a delegator names a validator and,
 when that validator is at its cap, the rest of the stake is spread over other well-participating
@@ -31,7 +31,7 @@ You need Docker with the Compose plugin. A single local node, using the public i
 ```bash
 docker run -d --name saicon -p 26657:26657 -p 1317:1317 \
   --entrypoint /usr/local/bin/entrypoint-singlenode.sh \
-  ghcr.io/saicon-network/saicon:v0.9.1
+  ghcr.io/saicon-network/saicon:v0.10.0
 ```
 
 The entrypoint creates a fresh single-validator chain on first start; `docker rm -f saicon`

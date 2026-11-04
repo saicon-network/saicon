@@ -45,6 +45,12 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 					Short:          "Lists one delegator's queue entries",
 					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "delegator_address"}},
 				},
+				{
+					RpcMethod:      "EntityStake",
+					Use:            "entity-stake [entity-id]",
+					Short:          "Shows an attested entity's aggregate stake, its cap and its active seats",
+					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "entity_id"}},
+				},
 			},
 		},
 		Tx: &autocliv1.ServiceCommandDescriptor{

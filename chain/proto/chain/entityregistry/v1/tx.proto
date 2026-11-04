@@ -1,0 +1,94 @@
+syntax = "proto3";
+package chain.entityregistry.v1;
+
+import "amino/amino.proto";
+import "chain/entityregistry/v1/params.proto";
+import "chain/entityregistry/v1/types.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/entityregistry/types";
+
+// Msg defines the Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // UpdateParams updates the module parameters. The authority defaults to x/gov.
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+
+  // AttestEntity creates an entity or replaces its attestation.
+  rpc AttestEntity(MsgAttestEntity) returns (MsgAttestEntityResponse);
+
+  // RevokeEntity withdraws an attestation.
+  rpc RevokeEntity(MsgRevokeEntity) returns (MsgRevokeEntityResponse);
+
+  // OfferVrfKey offers a VRF public key for the signer's validator, with a proof
+  // of possession; an attestor may then bind it in MsgAttestEntity.
+  rpc OfferVrfKey(MsgOfferVrfKey) returns (MsgOfferVrfKeyResponse);
+}
+
+message MsgUpdateParams {
+  option (cosmos.msg.v1.signer) = "authority";
+  option (amino.name) = "chain/x/entityregistry/MsgUpdateParams";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  // NOTE: All parameters must be supplied.
+  Params params = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message MsgUpdateParamsResponse {}
+
+// MsgAttestEntity creates an entity or replaces its attestation (spec §6.1).
+message MsgAttestEntity {
+  option (cosmos.msg.v1.signer) = "attestor";
+  option (amino.name) = "chain/x/entityregistry/MsgAttestEntity";
+
+  string attestor = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string entity_id = 2;
+  string display_name = 3;
+  string attestation_hash = 4;
+  // validators is the complete member list after this attestation, 1-8 entries.
+  repeated string validators = 5 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  // vrf_keys binds offered VRF keys to listed members; a staying member not
+  // named keeps its key.
+  repeated MemberVrfKey vrf_keys = 6 [(gogoproto.nullable) = false];
+}
+
+message MsgAttestEntityResponse {
+  // replaced is true when the entity existed before.
+  bool replaced = 1;
+}
+
+// MsgRevokeEntity withdraws an attestation (spec §6.2).
+message MsgRevokeEntity {
+  option (cosmos.msg.v1.signer) = "authority";
+  option (amino.name) = "chain/x/entityregistry/MsgRevokeEntity";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string entity_id = 2;
+  string reason = 3;
+}
+
+message MsgRevokeEntityResponse {
+  // frozen are the members that held an active seat and are now frozen.
+  repeated string frozen = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+}
+
+// MsgOfferVrfKey offers a VRF public key for the signer's validator (spec §6.1).
+message MsgOfferVrfKey {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "chain/x/entityregistry/MsgOfferVrfKey";
+
+  // operator is the validator's operator account; the validator is its bytes.
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  string vrf_public_key = 2;
+  // proof_of_possession is an ECVRF proof, 160 lowercase hex characters, over
+  // PopAlpha(chain id, validator, key) under the offered key.
+  string proof_of_possession = 3;
+}
+
+message MsgOfferVrfKeyResponse {}

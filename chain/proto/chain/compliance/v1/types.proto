@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package chain.compliance.v1;
 
+import "cosmos_proto/cosmos.proto";
 import "gogoproto/gogo.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -21,6 +22,9 @@ enum ComplianceEventType {
   COMPLIANCE_EVENT_TYPE_CRITICAL_VIOLATION = 4;
   // Compliance restored (re-attestation completed / flag cleared).
   COMPLIANCE_EVENT_TYPE_RESTORED = 5;
+  // Coordinated-attack sanction (ADR-0010 §3): written only by
+  // MsgFireCoordinatedSanction.
+  COMPLIANCE_EVENT_TYPE_COORDINATED_ATTACK = 6;
 }
 
 // ComplianceState is the source-of-truth compliance record for a validator,
@@ -45,4 +49,148 @@ message ComplianceState {
 
   // reason is a free-text human-readable explanation for the last event.
   string reason = 5;
+}
+
+// MisbehaviorKind is the kind of CometBFT misbehaviour x/evidence handled
+// (spec §6.1).
+enum MisbehaviorKind {
+  MISBEHAVIOR_KIND_UNSPECIFIED = 0;
+  // Two conflicting votes at one height. The only kind that can arm an entity.
+  MISBEHAVIOR_KIND_DUPLICATE_VOTE = 1;
+  // A light-client attack. Recorded, never linked to an entity (spec C3).
+  MISBEHAVIOR_KIND_LIGHT_CLIENT_ATTACK = 2;
+}
+
+// Offence is an equivocation that x/evidence accepted (slashed, jailed,
+// tombstoned), recorded by x/compliance under its evidence hash (spec §6.1, §10).
+message Offence {
+  // evidence_hash is 64 uppercase hex, the key x/evidence stores the evidence
+  // under (spec §5.3).
+  string evidence_hash = 1;
+  // validator is the operator address (saiconvaloper) of the double-signer.
+  string validator = 2;
+  // consensus_address is the bech32 consensus address, as in the Equivocation.
+  string consensus_address = 3;
+  // kind is the misbehaviour kind; never UNSPECIFIED.
+  MisbehaviorKind kind = 4;
+  // infraction_height is the height of the conflicting votes (>= 1).
+  int64 infraction_height = 5;
+  // infraction_time is the time of the conflicting votes.
+  google.protobuf.Timestamp infraction_time = 6 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
+  // power is the consensus power at the infraction.
+  int64 power = 7;
+  // double_sign_fraction is d: the slash_fraction_double_sign that x/evidence
+  // applied for this offence, in [0, 1]. Never assumed to be 0.10 (spec §8.2).
+  string double_sign_fraction = 8 [(cosmos_proto.scalar) = "cosmos.Dec", (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec", (gogoproto.nullable) = false];
+  // entity_id is the entity the validator belonged to at the infraction height
+  // (spec §6.2); empty when none or when kind is not DUPLICATE_VOTE.
+  string entity_id = 9;
+  // recorded_height is the height of the block that recorded the offence (>= infraction_height).
+  int64 recorded_height = 10;
+  // recorded_time is the time of the block that recorded the offence.
+  google.protobuf.Timestamp recorded_time = 11 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
+  // sanction_id is the sanction that fired this offence; 0 until fired.
+  uint64 sanction_id = 12;
+}
+
+// TargetOutcome is what a coordinated-attack sanction did to one target
+// (spec §8.3).
+enum TargetOutcome {
+  TARGET_OUTCOME_UNSPECIFIED = 0;
+  // The extra fraction was slashed.
+  TARGET_OUTCOME_SLASHED = 1;
+  // The fraction does not exceed the double-sign fraction already applied.
+  TARGET_OUTCOME_NOTHING_TO_ADD = 2;
+  // x/staking can no longer slash the validator: Unbonded, removed, or its
+  // consensus key now belongs to another incarnation (spec §8.3).
+  TARGET_OUTCOME_NOT_SLASHABLE = 3;
+}
+
+// TargetClassification says whether a sanction classified its target (compliance
+// event 6, C=0, the jail, reputation zeroed) and, when it did not, why (spec §8.6).
+// A sanction classifies only the incarnation that committed the offence.
+enum TargetClassification {
+  // Never recorded.
+  TARGET_CLASSIFICATION_UNSPECIFIED = 0;
+  // The target was classified.
+  TARGET_CLASSIFICATION_CLASSIFIED = 1;
+  // Not classified: x/staking removed the offence's validator after the offence,
+  // so whatever holds the operator or the consensus key now is another incarnation.
+  TARGET_CLASSIFICATION_SKIPPED_KEY_REMOVED = 2;
+  // Not classified: x/staking holds the offence's consensus key under another operator.
+  TARGET_CLASSIFICATION_SKIPPED_KEY_REUSED = 3;
+  // Not classified: x/staking holds no validator on the offence's consensus key.
+  TARGET_CLASSIFICATION_SKIPPED_NO_VALIDATOR = 4;
+  // Not classified: x/validatorregistry has no record of the operator.
+  TARGET_CLASSIFICATION_SKIPPED_NO_REGISTRY_RECORD = 5;
+}
+
+// SanctionTarget records what a sanction did to one named offence (spec §8).
+message SanctionTarget {
+  // evidence_hash is the fired offence, 64 uppercase hex (spec §5.3).
+  string evidence_hash = 1;
+  // validator is the operator address of the target.
+  string validator = 2;
+  // extra_fraction is F - d, the additional share slashed (zero when nothing to add).
+  string extra_fraction = 3 [(cosmos_proto.scalar) = "cosmos.Dec", (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec", (gogoproto.nullable) = false];
+  // validator_burned is what x/staking returned: the validator's own part, not
+  // the unbonding and redelegation entries'.
+  string validator_burned = 4 [(cosmos_proto.scalar) = "cosmos.Int", (gogoproto.customtype) = "cosmossdk.io/math.Int", (gogoproto.nullable) = false];
+  // outcome is what happened to this target.
+  TargetOutcome outcome = 5;
+  // base_tokens is the validator's slashing base: its power at the infraction
+  // height in tokens, as passed to x/staking (spec §8.2).
+  string base_tokens = 6 [(cosmos_proto.scalar) = "cosmos.Int", (gogoproto.customtype) = "cosmossdk.io/math.Int", (gogoproto.nullable) = false];
+  // classification is whether the target was classified, and why not (spec §8.6).
+  TargetClassification classification = 7;
+}
+
+// Sanction is one executed coordinated-attack sanction (spec §10).
+message Sanction {
+  // id is the sanction id, from 1.
+  uint64 id = 1;
+  // entity_id is the armed entity the sanction was fired against.
+  string entity_id = 2;
+  // fraction is F, the total share burned per target (spec §8.2).
+  string fraction = 3 [(cosmos_proto.scalar) = "cosmos.Dec", (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec", (gogoproto.nullable) = false];
+  // targets is one entry per fired offence, ordered by operator address bytes.
+  repeated SanctionTarget targets = 4 [(gogoproto.nullable) = false];
+  // authority is the gov module account that fired it.
+  string authority = 5;
+  // reason is the free text of the message, at most 256 bytes.
+  string reason = 6;
+  // height is the block height of the execution.
+  int64 height = 7;
+  // time is the block time of the execution.
+  google.protobuf.Timestamp time = 8 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
+}
+
+// CoordinatedCase is the query view of one entity's case (spec §11).
+message CoordinatedCase {
+  // entity_id is the entity.
+  string entity_id = 1;
+  // armed is true when duplicate-vote offences of >= 2 distinct validators are linked to it (spec §6.3).
+  bool armed = 2;
+  // armed_height is the recorded_height of the offence that armed the entity; 0 when not armed.
+  int64 armed_height = 3;
+  // armed_time is the recorded_time of the offence that armed the entity; zero when not armed.
+  google.protobuf.Timestamp armed_time = 4 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
+  // validators is the distinct linked validators, operator addresses, sorted.
+  repeated string validators = 5;
+  // offences is the linked duplicate-vote offences, ordered by (recorded_height, hash bytes).
+  repeated Offence offences = 6 [(gogoproto.nullable) = false];
+  // unfired_hashes is the evidence hashes of the linked offences not yet fired, 64 uppercase hex.
+  repeated string unfired_hashes = 7;
+}
+
+// SanctionPlan is what a firing would do, computed by the same function the
+// execution uses (spec §7.5).
+message SanctionPlan {
+  // targets is the planned targets, ordered by operator address bytes.
+  repeated SanctionTarget targets = 1 [(gogoproto.nullable) = false];
+  // earliest_execution_time is armed_time plus the appeal window (spec §7.4).
+  google.protobuf.Timestamp earliest_execution_time = 2 [(gogoproto.stdtime) = true, (gogoproto.nullable) = false];
+  // slashable_until is the earliest UnbondingTime among the targets planned
+  // SLASHED that x/staking has unbonding (spec §6.4); absent when none is.
+  google.protobuf.Timestamp slashable_until = 3 [(gogoproto.stdtime) = true];
 }

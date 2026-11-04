@@ -20,4 +20,6 @@ var (
 	ErrAuthzTooDeep        = errors.Register(ModuleName, 1111, "authz.MsgExec nested too deep to verify stake caps")
 	ErrTooManyValidators   = errors.Register(ModuleName, 1112, "delegator already holds the maximum number of validators")
 	ErrBelowMinDelegation  = errors.Register(ModuleName, 1113, "delegation below the minimum")
+	ErrEntityCapReached    = errors.Register(ModuleName, 1114, "entity aggregate stake cap reached")
+	ErrEntityFrozen        = errors.Register(ModuleName, 1115, "validator takes no new stake while its entity standing is frozen")
 )

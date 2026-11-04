@@ -272,3 +272,149 @@ func TestHookLockupAllowsTopUp(t *testing.T) {
 	err := f.shrink(t, op, val(2), nscn(500), false)
 	require.ErrorIs(t, err, vrtypes.ErrLockupActive)
 }
+
+// setEntityRoom stores an entity cap that leaves acme exactly room nscn above
+// its current aggregate; room may be negative (the entity is over its cap).
+func (f *fixture) setEntityRoom(t *testing.T, room math.Int) {
+	t.Helper()
+	s, err := f.k.EntityStanding(f.ctx, val(1))
+	require.NoError(t, err)
+	st, err := f.k.CapState.Get(f.ctx)
+	require.NoError(t, err)
+	st.EntityCap = s.Tokens.Add(room)
+	require.NoError(t, f.k.CapState.Set(f.ctx, st))
+}
+
+// acmeHookFixture: acme = val(1), val(2); val(3) belongs to "other". The delegator
+// acc(9) holds 200 SCN with val(1), 100 with val(2) and 100 with val(3). The entity
+// cap leaves acme the given room.
+func acmeHookFixture(t *testing.T, room math.Int) *fixture {
+	t.Helper()
+	f := hookFixture(t)
+	f.ent.members[string(val(1))] = "acme"
+	f.ent.members[string(val(2))] = "acme"
+	f.ent.members[string(val(3))] = "other"
+	st, err := f.k.CapState.Get(f.ctx)
+	require.NoError(t, err)
+	st.EntityCap = nscn(100_000_000) // seeding must not trip the cap
+	require.NoError(t, f.k.CapState.Set(f.ctx, st))
+	require.NoError(t, f.grow(t, acc(9), val(1), nscn(200), false))
+	require.NoError(t, f.grow(t, acc(9), val(2), nscn(100), false))
+	require.NoError(t, f.grow(t, acc(9), val(3), nscn(100), false))
+	f.setEntityRoom(t, room)
+	return f
+}
+
+func TestHookEntityCap(t *testing.T) {
+	t.Run("growth past the entity room is refused", func(t *testing.T) {
+		f := acmeHookFixture(t, nscn(100))
+		require.ErrorIs(t, f.grow(t, acc(9), val(2), nscn(150), true), types.ErrEntityCapReached)
+	})
+	t.Run("growth to exactly the entity cap is ok", func(t *testing.T) {
+		f := acmeHookFixture(t, nscn(100))
+		require.NoError(t, f.grow(t, acc(9), val(2), nscn(100), true))
+	})
+	t.Run("a new delegation to a member counts too", func(t *testing.T) {
+		f := acmeHookFixture(t, nscn(100))
+		require.ErrorIs(t, f.grow(t, acc(8), val(2), nscn(101), false), types.ErrEntityCapReached)
+	})
+	t.Run("the operator topping up its own stake is not exempt", func(t *testing.T) {
+		f := acmeHookFixture(t, nscn(100))
+		require.ErrorIs(t, f.grow(t, acc(1), val(1), nscn(150), true), types.ErrEntityCapReached)
+	})
+	t.Run("a validator with no entity is under the per-validator cap only", func(t *testing.T) {
+		f := acmeHookFixture(t, nscn(100))
+		require.NoError(t, f.grow(t, acc(7), val(4), nscn(5_000), false))
+	})
+	t.Run("shrinking an entity above its cap is allowed", func(t *testing.T) {
+		f := acmeHookFixture(t, math.NewInt(-1))
+		require.NoError(t, f.shrink(t, acc(9), val(2), nscn(50), false))
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(200), true))
+	})
+}
+
+func TestHookFrozenEntityTakesNoStake(t *testing.T) {
+	f := acmeHookFixture(t, nscn(100))
+	f.ent.seats["acme"] = 3 // above max 2: the whole entity is frozen
+	require.ErrorIs(t, f.grow(t, acc(9), val(2), nscn(1), true), types.ErrEntityFrozen)
+	f = acmeHookFixture(t, nscn(100))
+	f.ent.seats["acme"] = 3
+	require.NoError(t, f.shrink(t, acc(9), val(2), nscn(50), false), "a frozen validator may shrink")
+
+	f = acmeHookFixture(t, nscn(100))
+	f.ent.frozen[string(val(4))] = true // a seat without a live attestation, no entity
+	require.ErrorIs(t, f.grow(t, acc(9), val(4), nscn(1), false), types.ErrEntityFrozen)
+}
+
+// Review Focus 4: what the ante skips for MsgBeginRedelegate, the hook skips for
+// an Unbond(src) followed by a Delegate(dst) of the same delegator and entity in
+// one transaction.
+func TestHookRedelegationInsideOneEntityIsNotGrowth(t *testing.T) {
+	over := math.NewInt(-1) // acme is 1 nscn over its cap
+
+	t.Run("moving stake between members is not growth", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(50), false))
+		require.NoError(t, f.grow(t, acc(9), val(2), nscn(50), true))
+	})
+	t.Run("into a member the delegator did not hold", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(50), false))
+		require.NoError(t, f.grow(t, acc(9), val(2), nscn(50), false))
+	})
+	t.Run("a full withdrawal (delegation removed) is exempt too", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(200), true))
+		require.NoError(t, f.grow(t, acc(9), val(2), nscn(200), true))
+	})
+	t.Run("the same inside a frozen entity", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		f.ent.seats["acme"] = 3
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(50), false))
+		require.NoError(t, f.grow(t, acc(9), val(2), nscn(50), true))
+	})
+	t.Run("only what was taken out is exempt", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(50), false))
+		require.ErrorIs(t, f.grow(t, acc(9), val(2), nscn(60), true), types.ErrEntityCapReached)
+	})
+	t.Run("only what was taken out is exempt, in a frozen entity", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		f.ent.seats["acme"] = 3
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(50), false))
+		require.ErrorIs(t, f.grow(t, acc(9), val(2), nscn(60), true), types.ErrEntityFrozen)
+	})
+	t.Run("the exemption is consumed as it is used", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(50), false))
+		require.NoError(t, f.grow(t, acc(9), val(2), nscn(30), true))
+		require.ErrorIs(t, f.grow(t, acc(9), val(2), nscn(30), true), types.ErrEntityCapReached, "only 20 of the 50 was left")
+	})
+	t.Run("the exemption is the same delegator's", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(50), false))
+		require.ErrorIs(t, f.grow(t, acc(8), val(2), nscn(50), false), types.ErrEntityCapReached)
+	})
+	t.Run("a withdrawal from another entity exempts nothing", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		require.NoError(t, f.shrink(t, acc(9), val(3), nscn(50), false))
+		require.ErrorIs(t, f.grow(t, acc(9), val(2), nscn(50), true), types.ErrEntityCapReached)
+	})
+	t.Run("a withdrawal from a validator with no entity exempts nothing", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		require.NoError(t, f.grow(t, acc(7), val(4), nscn(100), false))
+		require.NoError(t, f.shrink(t, acc(7), val(4), nscn(50), false))
+		require.ErrorIs(t, f.grow(t, acc(7), val(2), nscn(50), false), types.ErrEntityCapReached)
+	})
+	t.Run("another transaction's withdrawal exempts nothing", func(t *testing.T) {
+		f := acmeHookFixture(t, over)
+		f.ctx = f.ctx.WithTxBytes([]byte("tx-one"))
+		require.NoError(t, f.shrink(t, acc(9), val(1), nscn(50), false))
+		f.ctx = f.ctx.WithTxBytes([]byte("tx-two"))
+		require.ErrorIs(t, f.grow(t, acc(9), val(2), nscn(50), true), types.ErrEntityCapReached)
+	})
+	t.Run("a growth with no preceding withdrawal in an entity under its cap is unchanged", func(t *testing.T) {
+		f := acmeHookFixture(t, nscn(100))
+		require.NoError(t, f.grow(t, acc(9), val(2), nscn(100), true))
+	})
+}

@@ -53,7 +53,7 @@ fi
 # intent is legible rather than implied.
 APP_TOML="${HOME_DIR}/config/app.toml"
 UNBONDING_SECONDS=1814400                    # 21 days, matches staking unbonding_time (V-5)
-EVIDENCE_BLOCKS=$(( UNBONDING_SECONDS / 5 )) # 362,880 at a 5s block
+EVIDENCE_BLOCKS=$(( UNBONDING_SECONDS / 6 )) # 302,400, the genesis evidence window (gen-genesis.sh)
 NODE_PROFILE="${NODE_PROFILE:-validator}"
 case "${NODE_PROFILE}" in
   archive)

@@ -37,3 +37,16 @@ func TestCheckMinDelegation(t *testing.T) {
 	require.NoError(t, types.CheckMinDelegation(m, m))
 	require.ErrorIs(t, types.CheckMinDelegation(m.SubRaw(1), m), types.ErrBelowMinDelegation)
 }
+
+func TestCheckEntityGrowthAcrossStandings(t *testing.T) {
+	limited := types.EntityStanding{EntityID: "acme", Tokens: math.NewInt(90), Cap: math.NewInt(100)}
+	frozen := types.EntityStanding{Frozen: true, Reason: "r", Tokens: math.ZeroInt(), Cap: math.ZeroInt()}
+	free := types.EntityStanding{Tokens: math.ZeroInt(), Cap: math.ZeroInt()}
+	require.NoError(t, types.CheckEntityGrowth(limited, math.NewInt(90), math.NewInt(100)))
+	require.ErrorIs(t, types.CheckEntityGrowth(limited, math.NewInt(90), math.NewInt(101)), types.ErrEntityCapReached)
+	require.ErrorContains(t, types.CheckEntityGrowth(limited, math.NewInt(90), math.NewInt(101)), "entity acme's aggregate stake")
+	require.NoError(t, types.CheckEntityGrowth(limited, math.NewInt(120), math.NewInt(110)), "shrinking above the cap is allowed")
+	require.ErrorIs(t, types.CheckEntityGrowth(frozen, math.ZeroInt(), math.NewInt(1)), types.ErrEntityFrozen)
+	require.NoError(t, types.CheckEntityGrowth(frozen, math.NewInt(5), math.NewInt(5)))
+	require.NoError(t, types.CheckEntityGrowth(free, math.ZeroInt(), math.NewInt(1_000_000)))
+}

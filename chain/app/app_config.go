@@ -68,8 +68,12 @@ import (
 	compliancemoduletypes "github.com/saicon-network/saicon/chain/x/compliance/types"
 	_ "github.com/saicon-network/saicon/chain/x/delegationrouter/module"
 	delegationroutermoduletypes "github.com/saicon-network/saicon/chain/x/delegationrouter/types"
+	_ "github.com/saicon-network/saicon/chain/x/entityregistry/module"
+	entityregistrymoduletypes "github.com/saicon-network/saicon/chain/x/entityregistry/types"
 	_ "github.com/saicon-network/saicon/chain/x/participation/module"
 	participationmoduletypes "github.com/saicon-network/saicon/chain/x/participation/types"
+	_ "github.com/saicon-network/saicon/chain/x/randomness/module"
+	randomnessmoduletypes "github.com/saicon-network/saicon/chain/x/randomness/types"
 	_ "github.com/saicon-network/saicon/chain/x/rewards/module"
 	rewardsmoduletypes "github.com/saicon-network/saicon/chain/x/rewards/types"
 	_ "github.com/saicon-network/saicon/chain/x/stakeengine/module"
@@ -159,9 +163,13 @@ var (
 						group.ModuleName,
 						// chain modules
 						validatorregistrymoduletypes.ModuleName, compliancemoduletypes.ModuleName, participationmoduletypes.ModuleName, rewardsmoduletypes.ModuleName,
+						// After x/staking (which fires the bond hooks it may hold) and x/participation (an epoch closes before a newly promoted validator starts its first).
+						entityregistrymoduletypes.ModuleName,
 						// x/stakeengine last: it reads the epoch x/participation just closed, and
 						// fills the queue against the bonded total x/staking has settled.
-						stakeenginemoduletypes.ModuleName},
+						stakeenginemoduletypes.ModuleName,
+						// x/randomness last: its snapshot reads the entities x/entityregistry just promoted and the caps x/stakeengine just recomputed.
+						randomnessmoduletypes.ModuleName},
 					// The following is mostly only needed when ModuleName != StoreKey name.
 					OverrideStoreKeys: []*runtimev1alpha1.StoreKeyConfig{
 						{
@@ -177,6 +185,8 @@ var (
 						authtypes.ModuleName,
 						banktypes.ModuleName,
 						distrtypes.ModuleName,
+						// Before x/staking and x/genutil: gentx validators bond inside InitChain, and the activation gate must already know their entities (spec §7.4).
+						entityregistrymoduletypes.ModuleName,
 						stakingtypes.ModuleName,
 						slashingtypes.ModuleName,
 						govtypes.ModuleName,
@@ -198,7 +208,9 @@ var (
 						validatorregistrymoduletypes.ModuleName, compliancemoduletypes.ModuleName, participationmoduletypes.ModuleName, rewardsmoduletypes.ModuleName,
 						// After x/genutil: the first caps are computed from the bonded genesis set.
 						stakeenginemoduletypes.ModuleName,
-						delegationroutermoduletypes.ModuleName},
+						delegationroutermoduletypes.ModuleName,
+						// Round 1 is created here and scheduled by the first EndBlock; nothing it reads is needed yet, so it simply follows its dependencies.
+						randomnessmoduletypes.ModuleName},
 				}),
 			},
 			{
@@ -305,8 +317,14 @@ var (
 				Name:   stakeenginemoduletypes.ModuleName,
 				Config: appconfig.WrapAny(&stakeenginemoduletypes.Module{}),
 			}, {
+				Name:   entityregistrymoduletypes.ModuleName,
+				Config: appconfig.WrapAny(&entityregistrymoduletypes.Module{}),
+			}, {
 				Name:   delegationroutermoduletypes.ModuleName,
 				Config: appconfig.WrapAny(&delegationroutermoduletypes.Module{}),
+			}, {
+				Name:   randomnessmoduletypes.ModuleName,
+				Config: appconfig.WrapAny(&randomnessmoduletypes.Module{}),
 			}},
 	})
 )

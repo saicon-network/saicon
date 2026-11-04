@@ -2,15 +2,21 @@
 
 Status: **Proposed** (2026-07-28). The VP formula and the shape of the selection layer are
 *recorded* from the adopted Decision Register v1.0 ([DEVELOPMENT.md](../DEVELOPMENT.md) §2.0,
-§2.3 — lines 84–87, 108–119). The **lottery randomness source is undecided (blocker B11)** and
-this ADR only *recommends* one. Because 22 of 75 consensus seats depend on that undecided
-source, the ADR cannot be accepted as a whole.
+§2.3 — lines 84–87, 108–119). The **lottery randomness source was undecided (blocker B11)** when
+this ADR was written and the ADR only *recommended* one; the owner chose it on 2026-07-28 (update
+below). Because 22 of 75 consensus seats depend on that source, and it is implemented in shadow
+mode only and not yet audited, the ADR cannot be accepted as a whole.
+Update (S8, October 2026): the randomness source **B11 was chosen on 2026-07-28 (option (c), the
+per-validator VRF) and is implemented in shadow mode (S8, v0.10.0)**; it is not accepted for seats
+until audited (Q1'27), and the ADR as a whole stays *Proposed*. What was built, where it departs
+from the construction below and what it leaves open: "Implementation (S8, October 2026)".
 Origin: Register v1.0 (2026-07-24, adopted wholesale by project decision) + the code-review
 finding that opened B11 (DEVELOPMENT.md:310–312, 377).
 Related: [ADR-0004](ADR-0004-validator-activation-model.md) (activation), ADR-0009 (PS + WARP —
 supplies the `WARP` input), ADR-0011 (emission — owns the pool VP divides), ADR-0012 (caps —
-supplies `validatorCap` and the entity caps), ADR-0014 (entity registry — supplies "verified
-entity", **not yet written**), ADR-0005 (delegation router — **not yet written**; owns part of
+supplies `validatorCap` and the entity caps), [ADR-0014](ADR-0014-entity-registry.md) (entity
+registry — supplies "verified entity" and the one ticket per entity; accepted, D1–D3 implemented in
+S8), [ADR-0005](ADR-0005-delegation-router.md) (delegation router — implemented in S7; owns part of
 the B5 hand-off below).
 
 ## Context
@@ -167,7 +173,7 @@ in form only.
 | entity seat cap 2 | Stage 4 (DEVELOPMENT.md:273) | strongest result feeding this ADR |
 | `quality²` ticket weight | not swept in any stage | asserted |
 | **ranking key for the deterministic Top-42** | **WARP** — project decision 2026-07-28; the Register never named the quantity (DEVELOPMENT.md:110, 249) | **decided** |
-| **lottery randomness source** | **absent from every study and from the Register** (DEVELOPMENT.md:310–311) | **undecided — B11** |
+| **lottery randomness source** | **absent from every study and from the Register** (DEVELOPMENT.md:310–311) | **chosen 2026-07-28: option (c), per-validator VRF; shadow mode since S8, audit Q1'27 (B11)** |
 
 The 60-seat grid deserves an explicit reading, because it is easy to misreport: mean active
 quality falls **monotonically** as the set grows (94.2 at 50 → 90.2 at 90). The grid therefore
@@ -290,6 +296,108 @@ it is what produces the evidence B11's acceptance criterion asks for (a manipula
 argument backed by observation instead of assertion), and it feeds B1's churn measurement
 without putting seats at risk.
 
+## Implementation (S8, October 2026)
+
+Option (c) is built as `chain/x/randomness`, with the key on the member row of `x/entityregistry`
+and a leaf package `chain/crypto/vrf` shared by both and by the CLI. It runs in **shadow mode**: it
+computes and publishes a draw, and nothing reads it. It ships in the same `v0.10.0` upgrade as the
+entity registry, with no reset. Design: the design notes.
+What it does, against the five points of the construction above:
+
+- **Suite and library.** ECVRF-EDWARDS25519-SHA512-ELL2 (RFC 9381, suite string `0x04`) through
+  `github.com/oasisprotocol/curve25519-voi` (BSD 3-Clause, license re-verified 2026-10-28, already
+  linked through CometBFT and now a direct dependency). RFC 9381 Appendix B.4 Examples 19–21 run in
+  this repository's tests. Key validation (RFC 9381 §5.4.5) is always run: a non-canonical encoding,
+  a small-order point and a string that is not a point are refused. The library panics if
+  hash-to-curve fails, so the wrapper recovers and reports an invalid proof; V-14 re-verifies inside
+  EndBlock, where a panic would halt the chain. One verification is charged 2,000 gas on top of the
+  store costs. Public keys are 32 bytes, proofs 80, outputs 64, all lowercase hex on the wire.
+- **The key ceremony, in two signatures.** The validator's *operator* offers a key with
+  `MsgOfferVrfKey`, carrying a proof of possession made with that key over the chain id, the
+  validator and the key. The *attestor* binds the offered key inside `MsgAttestEntity` (field 6,
+  `vrf_keys`); a key the operator did not offer is refused. The split is deliberate: an attestor that
+  could register keys alone could register keys it holds for every entity it attests, which is one
+  party holding many bits — an undeclared coalition built into the ceremony. A key belongs to one
+  validator for the chain's lifetime, so a published proof cannot be replayed by the key's next
+  owner. The key is a separate file (`saicond vrf keygen`), never the consensus key.
+- **One designated submitter per entity** (point 2). The ticket is per entity, and this ADR bounds the
+  residual at one seat for one rotation to one entity; counting every validator's output would give an
+  entity as many bits as it has keyed members. At the snapshot the entity's submitter is the
+  ACTIVE member with the lowest operator address that holds a seasoned key, and only that validator's
+  operator account may submit. An entity with no such member is in the pool and in the quorum
+  denominator and cannot submit.
+- **Seasoning** (new; point 1 does not cover it). A key counts in round N only if it was bound before
+  round N−1's window opened, so it was fixed before any output that determines round N's input could
+  be in a block. Round 1 admits no key and is a warm-up that always ends SKIPPED.
+- **Rounds and window** (point 2). A rotation falls on a participation epoch boundary every
+  `rotation_epochs` (7) epochs; submissions are accepted only in the `window_blocks` (100) blocks
+  before it. Round N+1's heights are fixed when round N closes, so a governance change moves the next
+  round and never the running one. "Weekly" holds at the production epoch; on the DevNet's 100-block
+  epoch a rotation is 700 blocks.
+- **The seed** (points 1 and 3) is chained and is computed every round:
+  `seed_N = SHA-256("saicon/randomness/seed/v1" ‖ u64(N) ‖ input_N ‖ u32(n) ‖ sorted outputs)` and
+  `input_{N+1} = seed_N`. It extends `H(sorted(verified outputs))` with a domain tag, the round
+  number and the round's input, so a round with no outputs advances the chain instead of resetting
+  it to a constant. The first input is fixed in genesis (random on a fresh DevNet or testnet, a
+  published constant at the upgrade).
+- **Quorum** (point 5) is a code constant, integer arithmetic: `3·submitted ≥ 2·pool` and `pool ≥ 1`.
+  Below it the round is SKIPPED with a reason and an event and the previous cohort stands. There is
+  no penalty for not submitting (point 4): nothing in the module writes stake, status, EP, rewards or
+  tickets.
+- **The shadow draw.** On quorum, `min(22, pool)` entities ordered by
+  `SHA-256("saicon/randomness/draw/v1" ‖ seed ‖ entity id)`, stored with the pool, the sorted outputs
+  and the seed so any round is recomputable from state; the last 52 rounds are kept. The draw
+  history is unexported: no keeper method returns a draw, and a test fails if a package outside
+  `x/randomness`, `app` and `cmd/saicond` imports the module.
+- **V-14** is checked at every rotation and never halts: a break skips that round's draw with the
+  reason. Halting is not chosen, because a module that awards nothing would otherwise be able to
+  stop the chain. DEVELOPMENT.md §1.3 says to revisit it when S10 reads the seed.
+- **Where the shadow pool departs from the pseudocode in "Decision" §3.** The pseudocode draws from
+  `pool \ top53`, with `pool = ACTIVE ∧ C=1 ∧ WARP ≥ 65` after the caps, weighted by `quality²`.
+  WARP, the Top-53 and the quality weight do not exist until the selection layer (S10), so the
+  implementation uses **attested entities with at least one registry-ACTIVE member whose aggregate
+  stake is within the entity cap**, draws uniformly from the whole pool, and names entities rather
+  than the validator that would take the seat. An entity frozen only for its seat count stays in
+  the pool; the trim to two seats is the selection layer's.
+- **Cost.** One transaction per keyed pool entity per rotation. Measured in the app-level tests:
+  `MsgSubmitVrf` 53,172 gas, `MsgOfferVrfKey` 60,671, `MsgAttestEntity` 71,477 with one key and
+  165,833 with eight.
+
+**Residual added at implementation.** The residual above counts the submitter's own bit and its
+coalition amplification. Building the module added four lines to it. They are stated as residuals,
+not as a refutation of this ADR's choice:
+
+- **Proposer censorship.** Point 1 removes the proposer's grinding because no header feeds the seed.
+  It does not remove the proposer's control over *inclusion*: the proposer of a window block may leave
+  other entities' pending submissions out, choosing among subsets of their outputs, and the last
+  block of the window has no later proposer to include them. An honest client submits from the first
+  block in which it can (the loop script polls every 30 s by default, and then the exposure window
+  equals the polling interval; the runbook recommends 5 s), so only late submitters are exposed — and they hold the bit anyway. The window spans many
+  proposers. This is audit scope.
+- **Key grinding after an input is public.** A VRF's uniqueness assumes the key predates the input.
+  Seasoning closes this whenever the round that produced an input contained an output the binder does
+  not control. It does not after a round whose outputs all came from the binder's coalition, and it
+  does not for round 2 after the upgrade: round 1 always ends SKIPPED, so round 2's input is a
+  function of public data (round 1 has no outputs, because it admits no key), and whoever binds keys
+  before round 2's cutoff can choose among them. On the DevNet that is the SAiCoN operator; on a
+  network of several entities it is every operator.
+- **Key custody.** The chain proves the operator account offered the key and that someone holds its
+  secret. It cannot prove the operator alone holds it.
+- **The choice of the designated member.** The designation is fixed at the snapshot, after the
+  round's input is public. An entity with *k* seasoned keyed members can compute their *k* outputs and
+  pick which one counts by taking lower-addressed members out of ACTIVE before the snapshot. Blind to
+  the other entities' outputs this buys nothing; it multiplies the choices of a coalition whose
+  outputs are the only ones in the round.
+
+**What the DevNet shows.** It runs one validator, so the quorum of 2/3 of one is one: the single
+designated validator must submit, its output is the only entropy, and the draw returns the one
+ticket. The DevNet exercises scheduling, the snapshot, verification, chaining, skips, publication and
+the upgrade, and says nothing about manipulation-resistance. The evidence this ADR's interim policy
+asks for — submission timing inside the window, the skip rate, the share of rounds in which the last
+submitter could have flipped the draw — needs a network of many independent entities (the
+instrumented testnet) and then the Q1'27 audit. B11 is therefore *chosen and implemented*, and open
+for the third word of the interim policy.
+
 ### B5 — the >35% rebalancing trigger: the clamp is accepted here, the rest is re-exported
 
 ADR-0012 hands B5 to this ADR by name — *"Designing it is out of scope for this ADR (it belongs
@@ -351,7 +459,8 @@ Verified in this repository on branch `main` at the time of writing.
   ADR-0014 is **not yet written** (`chain/docs/adr/` holds 0001–0004, 0006–0012 only), so the
   prerequisite chain is open at its far end.
 - **No randomness primitive of any kind.** grep for `vrf`, `drand`, `commit-reveal`,
-  `randomness` over `chain/x`, `chain/app`, `chain/proto` returns nothing.
+  `randomness` over `chain/x`, `chain/app`, `chain/proto` returns nothing. *(True when written;
+  since S8, v0.10.0, the grep finds `x/randomness` and the key fields of `x/entityregistry`.)*
 
 ### Where the code contradicts the Register
 
@@ -403,8 +512,9 @@ Verified in this repository on branch `main` at the time of writing.
   `stake_exit` failure — Top-10 VP 36.2% > 35% (DEVELOPMENT.md:285) — is a failure of that
   delegated defence and is open as B5; the VP-clamp half of it is accepted into this ADR's scope
   above, the rest re-exported.
-- **This ADR carries the Register's two weakest parameters and its one undecided one.** 70/30 and
-  60 are both uncalibrated, and the randomness source is undecided. It is the ADR in the Q3 wave
+- **This ADR carries the Register's two weakest parameters and one source that is chosen but not
+  audited.** 70/30 and 60 are both uncalibrated, and the randomness source is implemented in shadow
+  mode only. It is the ADR in the Q3 wave
   most likely to need reopening once B1 (consensus benchmark) and B2 (≥90 real epochs of
   telemetry) produce evidence.
 

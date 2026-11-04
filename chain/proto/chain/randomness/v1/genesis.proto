@@ -1,0 +1,26 @@
+syntax = "proto3";
+package chain.randomness.v1;
+
+import "amino/amino.proto";
+import "chain/randomness/v1/params.proto";
+import "chain/randomness/v1/types.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/randomness/types";
+
+// GenesisState is the whole randomness module (spec §14).
+message GenesisState {
+  Params params = 1 [(gogoproto.nullable) = false, (amino.dont_omitempty) = true];
+  // initial_input is the input of round 1, 64 lowercase hex characters; used
+  // only when current_round is absent.
+  string initial_input = 2;
+  // current_round is absent on a fresh chain: InitGenesis then creates round 1
+  // from initial_input.
+  Round current_round = 3;
+  // pool is the snapshot; empty unless current_round is OPEN.
+  repeated PoolEntry pool = 4 [(gogoproto.nullable) = false];
+  // submissions are the current round's; empty unless current_round is OPEN.
+  repeated Submission submissions = 5 [(gogoproto.nullable) = false];
+  // draws are the last 52 closed rounds.
+  repeated Draw draws = 6 [(gogoproto.nullable) = false];
+}

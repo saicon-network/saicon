@@ -15,4 +15,5 @@ var (
 	ErrLockupActive               = errors.Register(ModuleName, 1104, "validator self-stake is locked")
 	ErrLockupTooShort             = errors.Register(ModuleName, 1105, "requested self-stake lock-up is shorter than the chain minimum")
 	ErrLockupTooLong              = errors.Register(ModuleName, 1106, "requested self-stake lock-up is longer than the chain maximum")
+	ErrActivationHeld             = errors.Register(ModuleName, 1107, "activation held by the entity registry")
 )

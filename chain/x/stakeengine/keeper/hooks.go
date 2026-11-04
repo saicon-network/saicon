@@ -3,6 +3,7 @@ package keeper
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 
 	errorsmod "cosmossdk.io/errors"
@@ -21,6 +22,13 @@ import (
 // validator's tokens, the bonded pool and the operator's own stake; the after
 // hook compares and applies the same predicates the ante does. A hook error
 // aborts the operation, and the message with it.
+//
+// The entity aggregate cap and the freeze are checked here too (spec §8.3). A
+// redelegation inside one entity is an Unbond of the source followed by a Delegate
+// to the destination, so the hook keeps, per transaction, delegator and entity,
+// what the delegator took out of the entity's members, and lets a later growth at
+// a member of the same entity use it up — the hook's counterpart of the ante
+// skipping MsgBeginRedelegate between two members.
 type Hooks struct{ k Keeper }
 
 var _ stakingtypes.StakingHooks = Hooks{}
@@ -62,7 +70,20 @@ func (h Hooks) record(ctx context.Context, d sdk.AccAddress, v sdk.ValAddress, e
 	if err != nil {
 		return err
 	}
-	rec := types.HookRecord{Tokens: tokens, Bonded: bonded, SelfBond: math.ZeroInt(), Existed: existed}
+	rec := types.HookRecord{
+		Tokens: tokens, Bonded: bonded, SelfBond: math.ZeroInt(), Existed: existed, DelegationTokens: math.ZeroInt(),
+	}
+	// A direct lookup, not EntityStanding, which would sum the whole entity.
+	if m, isMember, err := h.k.entityKeeper.EntityOf(ctx, v); err != nil {
+		return err
+	} else if isMember {
+		rec.EntityId = m.EntityId
+		if existed {
+			if rec.DelegationTokens, err = h.k.delegationTokens(ctx, d, v); err != nil {
+				return err
+			}
+		}
+	}
 	if bytes.Equal(d, v) {
 		rec.IsOperator = true
 		if rec.SelfBond, err = h.k.SelfBond(ctx, v); err != nil {
@@ -93,6 +114,9 @@ func (h Hooks) check(ctx context.Context, d sdk.AccAddress, v sdk.ValAddress, re
 	if err := h.k.cdc.Unmarshal(bz, &rec); err != nil {
 		return err
 	}
+	if err := h.noteOutflow(ctx, d, v, rec, removed); err != nil {
+		return err
+	}
 	caps, err := h.k.capState(ctx)
 	if err != nil {
 		return err
@@ -109,6 +133,9 @@ func (h Hooks) check(ctx context.Context, d sdk.AccAddress, v sdk.ValAddress, re
 		return err
 	}
 	if err := types.CheckGrowth(rec.Tokens, tokens, caps.ValidatorCap, types.ErrValidatorCapReached, "validator "+v.String()); err != nil {
+		return err
+	}
+	if err := h.checkEntity(ctx, d, v, rec, tokens); err != nil {
 		return err
 	}
 	if rec.IsOperator {
@@ -160,6 +187,54 @@ func (h Hooks) check(ctx context.Context, d sdk.AccAddress, v sdk.ValAddress, re
 	return nil
 }
 
+// noteOutflow adds what the delegator took out of a member of an entity to the
+// transaction's counter for that entity. For an Unbond the validator's tokens have
+// not fallen yet when the hook fires, so the delegation after is measured at the
+// old exchange rate, like the delegation before.
+func (h Hooks) noteOutflow(ctx context.Context, d sdk.AccAddress, v sdk.ValAddress, rec types.HookRecord, removed bool) error {
+	if rec.EntityId == "" {
+		return nil
+	}
+	after := math.ZeroInt()
+	if !removed {
+		var err error
+		if after, err = h.k.delegationTokens(ctx, d, v); err != nil {
+			return err
+		}
+	}
+	out := rec.DelegationTokens.Sub(after)
+	if !out.IsPositive() {
+		return nil
+	}
+	return h.k.addOutflow(ctx, d, rec.EntityId, out)
+}
+
+// checkEntity applies the entity predicate to the growth of v's entity in this
+// operation, after the exemption for stake the same delegator took out of the
+// same entity earlier in the transaction.
+func (h Hooks) checkEntity(ctx context.Context, d sdk.AccAddress, v sdk.ValAddress, rec types.HookRecord, tokens math.Int) error {
+	standing, err := h.k.EntityStanding(ctx, v)
+	if err != nil {
+		return err
+	}
+	before, after := rec.Tokens, tokens
+	if standing.EntityID != "" {
+		// Only v changed in this operation, so the entity grew by what v grew.
+		before, after = standing.Tokens.Sub(tokens.Sub(rec.Tokens)), standing.Tokens
+		// A redelegation inside the entity is not growth (spec §8.3): what this
+		// delegator took out of the same entity earlier in this transaction is
+		// exempt, and is consumed as it is used.
+		if grown := after.Sub(before); grown.IsPositive() {
+			exempt, err := h.k.consumeOutflow(ctx, d, standing.EntityID, grown)
+			if err != nil {
+				return err
+			}
+			before = before.Add(exempt)
+		}
+	}
+	return types.CheckEntityGrowth(standing, before, after)
+}
+
 func (h Hooks) BeforeDelegationCreated(ctx context.Context, d sdk.AccAddress, v sdk.ValAddress) error {
 	return h.record(ctx, d, v, false)
 }
@@ -191,3 +266,82 @@ func (Hooks) BeforeValidatorSlashed(context.Context, sdk.ValAddress, math.Legacy
 	return nil
 }
 func (Hooks) AfterUnbondingInitiated(context.Context, uint64) error { return nil }
+
+// delegationTokens is the delegator's own delegation to v in tokens, zero when it
+// has none.
+func (k Keeper) delegationTokens(ctx context.Context, d sdk.AccAddress, v sdk.ValAddress) (math.Int, error) {
+	del, err := k.stakingKeeper.GetDelegation(ctx, d, v)
+	if errors.Is(err, stakingtypes.ErrNoDelegation) {
+		return math.ZeroInt(), nil
+	}
+	if err != nil {
+		return math.Int{}, err
+	}
+	validator, err := k.stakingKeeper.GetValidator(ctx, v)
+	if err != nil {
+		return math.Int{}, err
+	}
+	return validator.TokensFromShares(del.Shares).TruncateInt(), nil
+}
+
+// outflowKey is the transient key of the tokens delegator d took out of entity
+// entityID's members in the current transaction. It is keyed by the hash of the
+// transaction's bytes, so one transaction's withdrawal never exempts another's
+// growth. Everything that reaches the hook outside a transaction — messages
+// x/gov executes in EndBlock, and EndBlock queue fills for arbitrary delegators
+// — shares an empty TxBytes and so one key per (delegator, entity) per block: a
+// growth consumes only what the same delegator took out of the same entity
+// outside a transaction earlier in that block.
+func outflowKey(ctx context.Context, d sdk.AccAddress, entityID string) []byte {
+	sum := sha256.Sum256(sdk.UnwrapSDKContext(ctx).TxBytes())
+	key := append([]byte{}, types.EntityOutflowPrefix...)
+	key = append(key, sum[:]...)
+	key = append(key, address.MustLengthPrefix(d)...)
+	return append(key, entityID...)
+}
+
+func (k Keeper) outflow(ctx context.Context, key []byte) (math.Int, error) {
+	bz, err := k.transientService.OpenTransientStore(ctx).Get(key)
+	if err != nil || bz == nil {
+		return math.ZeroInt(), err
+	}
+	var n math.Int
+	if err := n.Unmarshal(bz); err != nil {
+		return math.Int{}, err
+	}
+	return n, nil
+}
+
+// addOutflow raises the delegator's counter for the entity by amount.
+func (k Keeper) addOutflow(ctx context.Context, d sdk.AccAddress, entityID string, amount math.Int) error {
+	key := outflowKey(ctx, d, entityID)
+	cur, err := k.outflow(ctx, key)
+	if err != nil {
+		return err
+	}
+	bz, err := cur.Add(amount).Marshal()
+	if err != nil {
+		return err
+	}
+	return k.transientService.OpenTransientStore(ctx).Set(key, bz)
+}
+
+// consumeOutflow returns min(want, counter) and lowers the counter by it,
+// deleting the counter at zero.
+func (k Keeper) consumeOutflow(ctx context.Context, d sdk.AccAddress, entityID string, want math.Int) (math.Int, error) {
+	key := outflowKey(ctx, d, entityID)
+	cur, err := k.outflow(ctx, key)
+	if err != nil || !cur.IsPositive() {
+		return math.ZeroInt(), err
+	}
+	used := math.MinInt(want, cur)
+	st := k.transientService.OpenTransientStore(ctx)
+	if left := cur.Sub(used); left.IsPositive() {
+		bz, err := left.Marshal()
+		if err != nil {
+			return math.Int{}, err
+		}
+		return used, st.Set(key, bz)
+	}
+	return used, st.Delete(key)
+}

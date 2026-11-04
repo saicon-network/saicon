@@ -20,6 +20,26 @@ func CheckGrowth(before, after, limit math.Int, err *errorsmod.Error, what strin
 	return nil
 }
 
+// CheckEntityGrowth is ADR-0012 D4's aggregate cap and the freeze of spec §10,
+// for new stake into one validator. before and after are the entity's
+// aggregate (or the validator's own tokens when it has no entity). Like every
+// rule here it fires on growth only: growth of a frozen standing is
+// ErrEntityFrozen, growth of an entity's aggregate past its cap is
+// ErrEntityCapReached, and a validator with no entity is subject to the
+// per-validator cap alone.
+func CheckEntityGrowth(s EntityStanding, before, after math.Int) error {
+	if !after.GT(before) {
+		return nil
+	}
+	if s.Frozen {
+		return errorsmod.Wrap(ErrEntityFrozen, s.Reason)
+	}
+	if s.EntityID == "" {
+		return nil
+	}
+	return CheckGrowth(before, after, s.Cap, ErrEntityCapReached, "entity "+s.EntityID+"'s aggregate stake")
+}
+
 // CheckSelfBondFloor: an operator's own stake is either zero (it left) or at
 // least the entry floor.
 func CheckSelfBondFloor(after math.Int) error {

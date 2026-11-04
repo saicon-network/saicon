@@ -1,0 +1,55 @@
+syntax = "proto3";
+package chain.randomness.v1;
+
+import "amino/amino.proto";
+import "chain/randomness/v1/params.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/randomness/types";
+
+// Msg defines the Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // UpdateParams updates the module parameters. The authority defaults to x/gov.
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+
+  // SubmitVrf submits the designated validator's VRF proof for the current round.
+  rpc SubmitVrf(MsgSubmitVrf) returns (MsgSubmitVrfResponse);
+}
+
+message MsgUpdateParams {
+  option (cosmos.msg.v1.signer) = "authority";
+  option (amino.name) = "chain/x/randomness/MsgUpdateParams";
+
+  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  // NOTE: All parameters must be supplied.
+  Params params = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+message MsgUpdateParamsResponse {}
+
+// MsgSubmitVrf submits a VRF proof for the current round (spec §8).
+message MsgSubmitVrf {
+  option (cosmos.msg.v1.signer) = "operator";
+  option (amino.name) = "chain/x/randomness/MsgSubmitVrf";
+
+  // operator is the designated validator's operator account; the validator is
+  // its bytes.
+  string operator = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  // round is the current round's number.
+  uint64 round = 2;
+  // proof is an ECVRF proof, 160 lowercase hex characters, over RoundAlpha
+  // (chain id, round, input) under the validator's snapshot key.
+  string proof = 3;
+}
+
+message MsgSubmitVrfResponse {
+  // output is the verified VRF output, 128 lowercase hex characters.
+  string output = 1;
+}

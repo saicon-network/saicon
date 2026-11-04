@@ -24,7 +24,7 @@ Everything a page needs to connect a wallet and read the chain, with the endpoin
 | Display symbol | `SCN` |
 | Decimals | **8** — 1 SCN = 100 000 000 nscn |
 | Minimum gas price | 0 |
-| SDK / consensus | Cosmos SDK v0.53.6 · CometBFT 0.38.21 |
+| SDK / consensus | Cosmos SDK v0.53.8 · CometBFT 0.38.25 |
 | CORS | already open — `Access-Control-Allow-Origin: *`, methods `GET, POST, OPTIONS` |
 
 **Coin type 118 is the important line.** It means Keplr, Leap and Ledger reach SAiCoN

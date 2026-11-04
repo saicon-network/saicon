@@ -2,12 +2,10 @@ package chain
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 	"strconv"
-	"time"
 )
 
 // noRecordError separates "the chain has no record" from "the request failed".
@@ -17,13 +15,18 @@ type noRecordError struct{ url string }
 func (e noRecordError) Error() string { return "no record: " + e.url }
 
 type REST struct {
-	base string
-	c    *http.Client
+	base  string
+	c     *http.Client
+	calls *countingTransport
 }
 
 func NewREST(baseURL string) *REST {
-	return &REST{base: baseURL, c: &http.Client{Timeout: 20 * time.Second}}
+	c, ct := newCountingClient()
+	return &REST{base: baseURL, c: c, calls: ct}
 }
+
+// Calls is the number of HTTP requests this client has sent.
+func (r *REST) Calls() uint64 { return r.calls.n.Load() }
 
 type Validator struct {
 	Operator        string
@@ -77,31 +80,30 @@ func (r *REST) EpochLength(ctx context.Context) (uint64, error) {
 	return n, nil
 }
 
-func (r *REST) Validators(ctx context.Context) ([]Validator, error) {
-	var body struct {
-		Validators []struct {
-			OperatorAddress string `json:"operator_address"`
-			Jailed          bool   `json:"jailed"`
-			Status          string `json:"status"`
-			Tokens          string `json:"tokens"`
-			Description     struct {
-				Moniker string `json:"moniker"`
-			} `json:"description"`
-			Commission struct {
-				CommissionRates struct {
-					Rate string `json:"rate"`
-				} `json:"commission_rates"`
-			} `json:"commission"`
-			ConsensusPubkey struct {
-				Key string `json:"key"`
-			} `json:"consensus_pubkey"`
-		} `json:"validators"`
-	}
-	if err := getJSON(ctx, r.c, r.base+"/cosmos/staking/v1beta1/validators?pagination.limit=500", &body); err != nil {
-		return nil, fmt.Errorf("validators: %w", err)
-	}
-	out := make([]Validator, 0, len(body.Validators))
-	for _, v := range body.Validators {
+// stakingValidatorsBody is the x/staking validators list as the gateway writes it.
+type stakingValidatorsBody struct {
+	Validators []struct {
+		OperatorAddress string `json:"operator_address"`
+		Jailed          bool   `json:"jailed"`
+		Status          string `json:"status"`
+		Tokens          string `json:"tokens"`
+		Description     struct {
+			Moniker string `json:"moniker"`
+		} `json:"description"`
+		Commission struct {
+			CommissionRates struct {
+				Rate string `json:"rate"`
+			} `json:"commission_rates"`
+		} `json:"commission"`
+		ConsensusPubkey struct {
+			Key string `json:"key"`
+		} `json:"consensus_pubkey"`
+	} `json:"validators"`
+}
+
+func (b stakingValidatorsBody) validators() []Validator {
+	out := make([]Validator, 0, len(b.Validators))
+	for _, v := range b.Validators {
 		out = append(out, Validator{
 			Operator:        v.OperatorAddress,
 			Moniker:         v.Description.Moniker,
@@ -112,24 +114,82 @@ func (r *REST) Validators(ctx context.Context) ([]Validator, error) {
 			ConsensusPubKey: v.ConsensusPubkey.Key,
 		})
 	}
+	return out
+}
+
+const stakingValidatorsPath = "/cosmos/staking/v1beta1/validators?pagination.limit=500"
+
+func (r *REST) Validators(ctx context.Context) ([]Validator, error) {
+	var body stakingValidatorsBody
+	if err := getJSON(ctx, r.c, r.base+stakingValidatorsPath, &body); err != nil {
+		return nil, fmt.Errorf("validators: %w", err)
+	}
+	return body.validators(), nil
+}
+
+// ValidatorsAt is Validators read at a pinned height, following pagination.next_key.
+func (r *REST) ValidatorsAt(ctx context.Context, height int64) ([]Validator, error) {
+	var out []Validator
+	err := pagesAt(r.base+stakingValidatorsPath, func(u string) (*string, error) {
+		var body struct {
+			stakingValidatorsBody
+			Pagination pagination `json:"pagination"`
+		}
+		if err := getJSONAt(ctx, r.c, u, height, &body); err != nil {
+			return nil, err
+		}
+		out = append(out, body.validators()...)
+		return body.Pagination.NextKey, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("validators at %d: %w", height, err)
+	}
 	return out, nil
 }
 
-func (r *REST) RegistryValidators(ctx context.Context) ([]RegistryEntry, error) {
-	var body struct {
-		Validators []struct {
-			ValidatorAddress   string `json:"validator_address"`
-			Status             string `json:"status"`
-			BondingStart       string `json:"bonding_start"`
-			BondingStartHeight string `json:"bonding_start_height"`
-			LockupSeconds      string `json:"lockup_duration_seconds"`
-		} `json:"validators"`
+// pagination is the page trailer of a cosmos list answer; next_key is null or
+// empty on the last page.
+type pagination struct {
+	NextKey *string `json:"next_key"`
+}
+
+// pagesAt calls page with the list URL, then with pagination.key set to each
+// next_key the previous page returned, until a page returns none. A key that
+// comes back twice is an error rather than a loop. The key is opaque state the
+// gateway reads at the same pinned height, so the pages are one snapshot.
+func pagesAt(listURL string, page func(u string) (*string, error)) error {
+	seen := map[string]bool{}
+	u := listURL
+	for {
+		next, err := page(u)
+		if err != nil {
+			return err
+		}
+		if next == nil || *next == "" {
+			return nil
+		}
+		if seen[*next] {
+			return fmt.Errorf("next_key %q repeats", *next)
+		}
+		seen[*next] = true
+		u = listURL + "&pagination.key=" + url.QueryEscape(*next)
 	}
-	if err := getJSON(ctx, r.c, r.base+"/saicon/chain/validatorregistry/v1/validators?pagination.limit=500", &body); err != nil {
-		return nil, fmt.Errorf("registry: %w", err)
-	}
-	out := make([]RegistryEntry, 0, len(body.Validators))
-	for _, v := range body.Validators {
+}
+
+// registryValidatorsBody is the x/validatorregistry list as the gateway writes it.
+type registryValidatorsBody struct {
+	Validators []struct {
+		ValidatorAddress   string `json:"validator_address"`
+		Status             string `json:"status"`
+		BondingStart       string `json:"bonding_start"`
+		BondingStartHeight string `json:"bonding_start_height"`
+		LockupSeconds      string `json:"lockup_duration_seconds"`
+	} `json:"validators"`
+}
+
+func (b registryValidatorsBody) entries() ([]RegistryEntry, error) {
+	out := make([]RegistryEntry, 0, len(b.Validators))
+	for _, v := range b.Validators {
 		h, err := parseInt64(v.BondingStartHeight)
 		if err != nil {
 			return nil, fmt.Errorf("registry %s: bonding_start_height %q: %w", v.ValidatorAddress, v.BondingStartHeight, err)
@@ -145,6 +205,44 @@ func (r *REST) RegistryValidators(ctx context.Context) ([]RegistryEntry, error) 
 			BondingStartHeight: h,
 			LockupSeconds:      l,
 		})
+	}
+	return out, nil
+}
+
+const registryValidatorsPath = "/saicon/chain/validatorregistry/v1/validators?pagination.limit=500"
+
+func (r *REST) RegistryValidators(ctx context.Context) ([]RegistryEntry, error) {
+	var body registryValidatorsBody
+	if err := getJSON(ctx, r.c, r.base+registryValidatorsPath, &body); err != nil {
+		return nil, fmt.Errorf("registry: %w", err)
+	}
+	return body.entries()
+}
+
+// RegistryValidatorsAt is RegistryValidators read at a pinned height, following
+// pagination.next_key.
+func (r *REST) RegistryValidatorsAt(ctx context.Context, height int64) ([]RegistryEntry, error) {
+	var out []RegistryEntry
+	err := pagesAt(r.base+registryValidatorsPath, func(u string) (*string, error) {
+		var body struct {
+			registryValidatorsBody
+			Pagination *pagination `json:"pagination"`
+		}
+		if err := getJSONAt(ctx, r.c, u, height, &body); err != nil {
+			return nil, err
+		}
+		es, err := body.entries()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, es...)
+		if body.Pagination == nil { // the registry answers "pagination": null for one page
+			return nil, nil
+		}
+		return body.Pagination.NextKey, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("registry at %d: %w", height, err)
 	}
 	return out, nil
 }
@@ -250,39 +348,8 @@ func parseInt64(s string) (int64, error) {
 	return strconv.ParseInt(s, 10, 64)
 }
 
+// getJSON reads the latest state of url. The 404 rule and the error shapes are
+// fetchJSON's (at.go); a pinned read is getJSONAt.
 func getJSON(ctx context.Context, c *http.Client, url string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// The chain answers "no record for this address" with 404 and a gRPC-gateway
-	// body carrying codes.NotFound (5): {"code":5,"message":"...","details":[]}.
-	// That is data, not a failure, and the caller turns it into NULL — but the
-	// status code alone is not proof of that: an operator-configured base URL
-	// pointed at a public endpoint behind nginx or an ingress can answer an
-	// unmatched route with its own generic 404, which must not be silently
-	// read as "no record" or every validator quietly becomes NULL. Only a body
-	// that actually parses as that gRPC shape earns the "no record" reading;
-	// anything else on a 404 is a real error.
-	if resp.StatusCode == http.StatusNotFound {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		var grpcErr struct {
-			Code int `json:"code"`
-		}
-		if jsonErr := json.Unmarshal(b, &grpcErr); jsonErr == nil && grpcErr.Code == 5 {
-			return noRecordError{url: url}
-		}
-		return fmt.Errorf("HTTP 404 from %s: body not a chain \"no record\" response: %s", url, b)
-	}
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("HTTP %d from %s: %s", resp.StatusCode, url, b)
-	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	return fetchJSON(ctx, c, url, nil, out)
 }

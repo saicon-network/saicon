@@ -49,6 +49,13 @@ func TestChooseTakesTheHeaviestThenAddressOnTies(t *testing.T) {
 	require.Equal(t, []string{d.Operator, a.Operator}, ops(got)) // d heaviest; a beats b on bytes
 }
 
+func TestChooseTakesOneLegPerEntity(t *testing.T) {
+	a, b, d := c(1, "1", 1000, 300), c(2, "1", 1000, 200), c(3, "1", 1000, 100)
+	a.Entity, b.Entity = "x", "x" // a is the heavier of the two
+	got := types.Choose([]types.Candidate{b, a, d}, nil, 2, 2)
+	require.Equal(t, []string{a.Operator, d.Operator}, ops(got))
+}
+
 func TestChooseRespectsFreeSlots(t *testing.T) {
 	a, b, d := c(1, "1", 1000, 100), c(2, "1", 1000, 200), c(3, "1", 1000, 300)
 	held := map[string]bool{a.Operator: true}

@@ -1,11 +1,11 @@
 # ADR-0014: Entity registry — attestation before activation, the evidence ladder, and appeal
 
-Status: **Proposed** (2026-08-15) — target module: the entity registry alongside
-`x/stakeengine`, Q4 2026, see [DEVELOPMENT.md](../DEVELOPMENT.md) §4.
+Status: **Accepted (D1–D3 implemented in S8, v0.10.0; D4–D5 planned, B4)** — written 2026-08-15;
+module `x/entityregistry`, see [DEVELOPMENT.md](../DEVELOPMENT.md) §1.1 and §2.4.
 Source of the parameter values: **Decision Register v1.0** §2.4 and §2.7; evidence from Stage 4
 and Stage 10 of the calibration program (both executed — see the research archive).
 Related: [ADR-0012](ADR-0012-caps-and-stake-engine.md) (caps this registry makes enforceable),
-[ADR-0010](ADR-0010-slashing-policy.md) §3 (the coordinated-attack rule, still undecided),
+[ADR-0010](ADR-0010-slashing-policy.md) §3 (the coordinated-attack rule, decided by D-S8-2 and implemented in S8),
 [ADR-0013](ADR-0013-bounded-dao-authority.md) (governance bounds), ADR-0008 (the lottery whose
 ticket allocation this changes).
 
@@ -101,14 +101,17 @@ ADR-0010). These are different clocks for different things — one bounds how lo
 take, the other how soon a jailed validator may petition — and §2.7 flags that they have been
 stated separately often enough to be confused. They are stated together here for that reason.
 
-### D6 — What this ADR does not decide
+### D6 — The coordinated-attack slash tier: decided elsewhere, on this registry
 
-The **coordinated-attack slash tier** (ADR-0010 §3) is not decided here and cannot be until
-this registry exists. That ADR records why: no fraction, no evidence standard, no submitter and
-no governance path exists in the Register or in any of the eleven studies, and slashing on an
-inference that is wrong 91% of the time against a careful adversary is a liability rather than
-a defence. The registry is the precondition — it is the first point at which "these validators
-act as one" can be *stated* rather than guessed — not the decision.
+The **coordinated-attack slash tier** (ADR-0010 §3) is not decided by this ADR; it was decided by the
+owner on 2026-10-28 (D-S8-2) and implemented in S8 (ADR-0010 §3, Decision and Implementation). That
+ADR records why it had to wait: no fraction, no evidence standard, no submitter and no governance
+path existed in the Register or in any of the eleven studies, and slashing on an inference that is
+wrong 91% of the time against a careful adversary is a liability rather than a defence. The registry
+was the precondition — the first point at which "these validators act as one" can be *stated* rather
+than guessed — and the rule uses it exactly that way: it arms on duplicate-vote evidence for at least
+two validators the registry links to one entity, and governance ratifies. It does not turn D4 around:
+a risk score still never slashes, and the rule's reach is as wide as attestation's honesty (D1).
 
 ## Open problem (🚧) — the thresholds are calibrated on synthetic labels
 
@@ -153,6 +156,47 @@ false-positive gain, high-signal detection within twelve weeks falling from 95% 
 
 **Slashing on the risk score.** Rejected as a category error — see D4 and ADR-0010 §3.
 
+## Implementation (S8, October 2026)
+
+`chain/x/entityregistry`, with the aggregate cap in `chain/x/stakeengine` and the first upgrade
+handler in `chain/app/upgrades.go`; design in
+the design notes.
+D1–D3 are built; D4 (the evidence ladder) and D5 (appeal) are planned work under blocker B4.
+
+- **The module.** An entity is an id, a display name, the SHA-256 of an off-chain attestation
+  document, the attestor and one to eight member validators; nothing personal is on-chain. The
+  attestors are a governed list in params, and `MsgAttestEntity` / `MsgRevokeEntity` are signed by
+  one of them or by the governance authority. A validator belongs to at most one entity.
+- **The gate (D1).** Every path into registry `ACTIVE` — activation on bond, `MsgClearFlag`,
+  `MsgUnjail` and the resume after an aborted exit — asks the registry. A validator without an
+  attested entity stays at BONDING and is promoted by a bounded EndBlock pass over held validators
+  once it is attested; a refusal never halts the chain (the bond hook returns nil on a hold).
+  Invariant V-12 halts if an ACTIVE validator is neither attested nor recorded as a frozen seat.
+- **The limits (D2, D3).** At most `max_active_seats` (default 2) ACTIVE seats per entity, enforced
+  by the gate; an aggregate stake cap `max(entity_cap_fraction × EWMA-30, entity_cap_floor)`
+  (default 5%), enforced by `x/stakeengine` on the ante path, the staking hooks, the queue fill and
+  the router; one ticket per attested entity, exposed by query.
+- **The freeze.** Over a limit an entity takes no new stake and its members cannot (re-)activate;
+  nobody is demoted or force-unbonded. A revoked entity's ACTIVE validators keep their seats,
+  recorded as frozen, until they leave ACTIVE; while they stay ACTIVE they still count against
+  the entity they were frozen out of, its seats and its aggregate stake. Which two seats stay when an entity holds more is
+  "first activated", provisional until ADR-0008 decides.
+- **The upgrade.** `v0.10.0` adds the store, migrates `x/stakeengine` to consensus version 2 and
+  attests every ACTIVE validator as its own one-member entity, so no earning validator is left
+  without a seat.
+- **Membership history (S8 W3).** For the coordinated-attack rule a member row carries the height the
+  validator joined its entity, and a departure row keeps, per validator, the last entity it left, the
+  height it left, and whether its seat stayed frozen and charged to that entity, and until when.
+  `Keeper.EntityAt(validator, height)` answers which entity owned a validator when it signed, by the
+  convention that a vote at height `h` is judged on the registry as committed at `h − 1`: a removal or
+  a revocation after the offence still links, a frozen seat still charged at `h` links (to a revoked
+  entity too), a validator that joined at or after `h` does not. Only the last departure per validator
+  is kept. Departures are in genesis; V-12 does not read them.
+- **The limitation (spec §3).** The gate decides the PoP active set, not CometBFT's: consensus is
+  still x/staking's top 75 by stake, so an unattested or frozen validator that x/staking bonds signs
+  with full voting power. Consensus-level enforcement is the selection layer's (S10, ADR-0008);
+  DEVELOPMENT.md §1.4 states the scope in full.
+
 ## References
 
 - [DEVELOPMENT.md](../DEVELOPMENT.md) §2.4 (entity caps), §2.7 (ladder and appeal), §3.2 (the
@@ -160,6 +204,6 @@ false-positive gain, high-signal detection within twelve weeks falling from 95% 
 - The research archive — Stage 4 (seat cap, executed), Stage 10 (thresholds, executed),
   Stage 7 (integrated stress test, executed)
 - [ADR-0012](ADR-0012-caps-and-stake-engine.md) D4 — the entity caps this registry enforces
-- [ADR-0010](ADR-0010-slashing-policy.md) §3 — the coordinated-attack tier this ADR unblocks
-  but does not decide
+- [ADR-0010](ADR-0010-slashing-policy.md) §3 — the coordinated-attack tier this registry made
+  possible, decided by D-S8-2 and implemented in S8
 - [ADR-0013](ADR-0013-bounded-dao-authority.md) — which of these values a vote may move

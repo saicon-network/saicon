@@ -1,8 +1,10 @@
 package keeper_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
+	entityregistrytypes "github.com/saicon-network/saicon/chain/x/entityregistry/types"
 	participationtypes "github.com/saicon-network/saicon/chain/x/participation/types"
 	"github.com/saicon-network/saicon/chain/x/stakeengine/keeper"
 	"github.com/saicon-network/saicon/chain/x/stakeengine/types"
@@ -300,6 +303,63 @@ func (r *stubRegistry) GetValidatorStatus(_ context.Context, a sdk.ValAddress) (
 	return vrtypes.Status_STATUS_ACTIVE, true, nil
 }
 
+// ---- entity registry ------------------------------------------------------------
+
+// stubEntities stands in for x/entityregistry's read-only lookups.
+type stubEntities struct {
+	members map[string]string           // string(val bytes) → entity id
+	frozen  map[string]bool             // string(val bytes) → holds a frozen seat
+	seats   map[string]uint32           // entity id → active seats
+	charged map[string][]sdk.ValAddress // entity id → ACTIVE frozen seats charged to it
+	max     uint32
+}
+
+func (e *stubEntities) EntityOf(_ context.Context, v sdk.ValAddress) (entityregistrytypes.Member, bool, error) {
+	id, ok := e.members[string(v)]
+	if !ok {
+		return entityregistrytypes.Member{}, false, nil
+	}
+	return entityregistrytypes.Member{EntityId: id}, true, nil
+}
+
+func (e *stubEntities) MemberValidators(_ context.Context, entityID string) ([]sdk.ValAddress, error) {
+	var out []sdk.ValAddress
+	for v, id := range e.members {
+		if id == entityID {
+			out = append(out, sdk.ValAddress(v))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i], out[j]) < 0 })
+	return out, nil
+}
+
+func (e *stubEntities) ActiveSeats(_ context.Context, entityID string) (uint32, error) {
+	return e.seats[entityID], nil
+}
+
+func (e *stubEntities) ChargedFrozenSeats(_ context.Context, entityID string) ([]sdk.ValAddress, error) {
+	return e.charged[entityID], nil
+}
+
+func (e *stubEntities) MaxActiveSeats(context.Context) (uint32, error) { return e.max, nil }
+
+func (e *stubEntities) IsFrozenSeat(_ context.Context, v sdk.ValAddress) (bool, error) {
+	return e.frozen[string(v)], nil
+}
+
+func (e *stubEntities) AttestedEntityIDs(context.Context) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range e.members {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 // ---- fixture ------------------------------------------------------------------
 
 type fixture struct {
@@ -309,6 +369,7 @@ type fixture struct {
 	staking *stubStaking
 	part    *stubParticipation
 	reg     *stubRegistry
+	ent     *stubEntities
 }
 
 // newFixture: a 10M SCN supply, one validator with 1M SCN self-bonded, a
@@ -332,12 +393,13 @@ func newFixture(t *testing.T) *fixture {
 	staking := newStaking(bank)
 	part := &stubParticipation{epochLen: 100, scores: map[string]math.LegacyDec{}, eps: map[string]math.Int{}}
 	reg := &stubRegistry{inactive: map[string]bool{}, locked: map[string]bool{}}
+	ent := &stubEntities{members: map[string]string{}, frozen: map[string]bool{}, seats: map[string]uint32{}, charged: map[string][]sdk.ValAddress{}, max: 2}
 
 	k := keeper.NewKeeper(
 		runtime.NewKVStoreService(storeKey), runtime.NewTransientStoreService(transientKey), encCfg.Codec,
 		addresscodec.NewBech32Codec(sdk.GetConfig().GetBech32AccountAddrPrefix()),
 		authtypes.NewModuleAddress(types.GovModuleName),
-		stubAuth{}, bank, staking, part, reg,
+		stubAuth{}, bank, staking, part, reg, ent,
 	)
 	// The queue tests enqueue small amounts; the 100 SCN production default is
 	// covered in types/params_test.go.
@@ -349,5 +411,5 @@ func newFixture(t *testing.T) *fixture {
 	staking.addValidator(val(1), nscn(1_000_000))
 	// The rest of supply sits in the validator operator's account.
 	bank.set(acc(1), nscn(9_000_000))
-	return &fixture{ctx: ctx, k: k, bank: bank, staking: staking, part: part, reg: reg}
+	return &fixture{ctx: ctx, k: k, bank: bank, staking: staking, part: part, reg: reg, ent: ent}
 }

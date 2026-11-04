@@ -13,32 +13,34 @@
 A Cosmos-SDK / CometBFT Layer-1 where **participation pays**: validators earn by measured
 participation — signed blocks, honesty, compliance — not by stake size alone.
 **Proof-of-Participation (PoP)** is the umbrella: proof-of-stake bonding + participation- and
-decentralization-weighted influence. Chain: Cosmos SDK v0.53.6, Go, base denom `nscn`
+decentralization-weighted influence. Chain: Cosmos SDK v0.53.8, Go, base denom `nscn`
 (1 SCN = 100,000,000 nscn, 8 decimals), max supply 21,000,000 SCN (enforced on every mint
 and on the genesis allocation — see §2.5). Layer-1 cost principle (ADR-0007): on-chain only what must be; derived
 analytics → off-chain backend; programmable app logic → CosmWasm (Q1).
 
 ---
 
-## 1. Current state (as-built, v0.9.1 — 25 October 2026)
+## 1. Current state (as-built, v0.10.0 — 2026-10-29)
 
 ### 1.1 Modules
 
 | Module | What it does | Status |
 |---|---|---|
-| `x/validatorregistry` | status machine (BONDING→ACTIVE→QUARANTINED/JAILED→UNBONDING→INACTIVE, table-gated), auto-activation on bond (ADR-0004), 60-day lock-up (V-3, ante-enforced), exit lifecycle + 21-day unstake cooldown (V-5) | ✅ |
-| `x/compliance` | C-flag (source of truth + mirror), evidence/clear messages, double-sign auto-jail (slash fraction ≥0.025 → CRITICAL_VIOLATION → C=0 + JAILED), **governed MsgUnjail** (gov-authority, 43,200-block cooldown, tombstone never resets), ClearFlag refuses JAILED (`ErrJailedRequiresUnjail`, 1108) | ✅ |
+| `x/validatorregistry` | status machine (BONDING→ACTIVE→QUARANTINED/JAILED→UNBONDING→INACTIVE, table-gated), activation on bond **through the entity registry's gate** (ADR-0004, superseded in part by ADR-0014; a validator with no attested entity waits at BONDING), 60-day lock-up (V-3, ante-enforced), exit lifecycle + 21-day unstake cooldown (V-5) | ✅ |
+| `x/compliance` | C-flag (source of truth + mirror), evidence/clear messages, double-sign auto-jail (any positive burn → CRITICAL_VIOLATION → C=0 + JAILED, ADR-0010: the downtime fraction is 0 in the binary and the `v0.10.0` upgrade enforces it, so the only burn x/staking reports to the hook is a double-sign), **governed MsgUnjail** (gov-authority, 43,200-block cooldown, tombstone never resets), ClearFlag refuses JAILED (`ErrJailedRequiresUnjail`, 1108). **The coordinated-attack sanction (S8 W3, ADR-0010 §3, project decision D-S8-2):** every duplicate-vote equivocation that `x/evidence` accepts is recorded under its evidence hash with the entity the validator belonged to at the infraction height (`x/entityregistry` `EntityAt`); an entity is **armed** when offences of at least two distinct validators are linked to it; a **governance proposal** (`MsgFireCoordinatedSanction`, gov authority only) names the entity, the hashes and the fraction and fires it, after an appeal window (default 7 days from the later of the arming and the latest named offence); each named double-signer's **total** burn becomes `coordinated_attack_fraction` of its stake at the infraction height (default 0.30, code bound [0.10, 1.00]), unbonding and redelegation entries included; compliance event 6 (`COORDINATED_ATTACK`), JAILED, tombstone stays, reputation zeroed best-effort, EP untouched (V-8). Only the incarnation that committed the offence is slashed or classified: the `AfterValidatorRemoved` hook records a tombstoned consensus key whose validator x/staking removes, and a target on such a key, or whose key x/staking holds under another operator, is `NOT_SLASHABLE` and not classified, so a validator re-created on the old key loses nothing; a target whose operator has no `x/validatorregistry` record is slashed and not classified (`SanctionTarget.classification` records why). Queries `offence`, `offences`, `case`, `armed`, `sanction`, `sanctions`, `sanction-preview`; V-15 below. Consensus version 2, migrated by the `v0.10.0` upgrade. Added in S8 (the design notes) | ✅ |
 | `x/participation` | PS v1 = precommit-uptime (single signal, weight 1.0) per block-epoch (default 100 blocks, `MsgUpdateParams`-tunable); EP accumulator (+1 per active epoch, optional decay-to-floor-1, `ep_decay=0` default) | ✅ (v1) |
 | `x/rewards` | EP-gated emission: `ACTIVE & C=1 & EP>0`. **Gas fees offset issuance** (observed, not taken — x/distribution still pays them stake-weighted). **Single mint path** — the epoch pool is minted once, sized by the Register security budget `clip(0.15/7·bonded, 0.005/7·supply, 0.0075/7·supply)/epochs_per_year`, clamped to the headroom below the **21M ceiling**, split among eligible validators, remainder carried forward; kill-switch `enabled` records a reason per validator; RewardSnapshot per validator per epoch with denial reasons | ✅ gate / ✅ budget + cap + gas offset |
-| `x/stakeengine` | the three stake limits (ADR-0012): **entry floor 2,000 SCN** of the operator's own self-bond (tier-1 constant); **global cap** `min(0.08·max supply, 0.60·public circulating)`, public circulating computed on-chain each epoch with the bonded pool, not-bonded pool and queue escrow counted as public; **per-validator cap** `max(0.02·EWMA-30(total bonded), floor)`. Enforced in the ante handler: up to five nested `authz.MsgExec` layers are unwrapped and checked; a sixth is refused. Net new stake at the global cap goes to an explicit **stake queue** (`MsgEnqueueDelegation`), escrowed and filled every EndBlock by validator quality (participation score, then EP) | ✅ |
+| `x/stakeengine` | the three stake limits (ADR-0012): **entry floor 2,000 SCN** of the operator's own self-bond (tier-1 constant); **global cap** `min(0.08·max supply, 0.60·public circulating)`, public circulating computed on-chain each epoch with the bonded pool, not-bonded pool and queue escrow counted as public; **per-validator cap** `max(0.02·EWMA-30(total bonded), floor)`; **entity cap** `max(entity_cap_fraction·EWMA-30(total bonded), entity_cap_floor)` (default 0.05) on the summed stake of an attested entity's validators, enforced on every path the other caps use — ante, staking hooks, queue fill, router (S8). Enforced in the ante handler: up to five nested `authz.MsgExec` layers are unwrapped and checked; a sixth is refused. Net new stake at the global cap goes to an explicit **stake queue** (`MsgEnqueueDelegation`), escrowed and filled every EndBlock by validator quality (participation score, then EP) | ✅ |
 | `x/delegationrouter` | `MsgDelegateRouted` (ADR-0005, §2.8): fills the delegator's chosen validator to its cap and spreads the rest over up to `max_route_legs` more (default 2) by quality × room ÷ stake, the part above the global cap joining the stake queue in the same message; `route` preview query; no module account. Shipped in v0.9.0 (S7) | ✅ |
-| Stock: staking, slashing, distribution, gov, bank, IBC (**`x/mint` removed**) | unmodified SDK defaults — relevant consequences: voting power = top-N by stake; downtime slash 1% flat; double-sign 5%. `x/mint` is **removed from the app** (B12 executed, 29 Jul): `x/rewards` is the only module holding Minter for `nscn`, so the 21M ceiling guards every path that can create supply | ⚠️ overrides pending (§2.5, §2.6) |
+| `x/entityregistry` | entities (id, display name, SHA-256 of an off-chain attestation document, attestor, 1–8 member validators); the attestors are a gov-only list in params, and `MsgAttestEntity` / `MsgRevokeEntity` are signed by one of them (or the governance authority). **The activation gate:** every path into registry `ACTIVE` — activation on bond, `MsgClearFlag`, `MsgUnjail`, the resume after an aborted exit — asks the registry, and a validator that is not a member of an attested entity, or whose entity already holds `max_active_seats` (default 2, bound [1, 3]) ACTIVE seats, stays at BONDING (a bounded EndBlock pass over held validators promotes them when the attestation or a seat arrives). One lottery ticket per attested entity (`tickets` query). **Frozen seats:** revoking an entity, or removing an ACTIVE validator from one, keeps the seat but records it frozen, so the validator takes no new stake and cannot re-activate; while it stays ACTIVE it is still charged to its former entity's seats and aggregate. **The VRF key (S8 W2):** the validator's operator offers a per-validator ECVRF public key with a proof of possession (`MsgOfferVrfKey`, `vrf-key` query), and the attestor binds the offered key inside `MsgAttestEntity` (field 6, `vrf_keys`); the key and the height at which it was bound are written on the member row, and a key belongs to one validator for the chain's lifetime. **Membership history (S8 W3):** a member row carries the height the validator joined its entity, and a departure row keeps, per validator, the last entity it left, when, and whether its seat stayed frozen and charged to that entity (until when), so `EntityAt(validator, height)` answers which entity owned a validator when it signed — after a removal or a revocation — for the coordinated-attack sanction; genesis carries the departures. First registered upgrade handler, `v0.10.0` (§5.1 R1). Added in S8 (ADR-0014 D1–D3) | ✅ |
+| `x/randomness` | per-validator VRF randomness for the lottery (option (c) of ADR-0008, B11), in **shadow mode**. Keys are the ones bound in the attestation (`x/entityregistry`); ECVRF-EDWARDS25519-SHA512-ELL2 (RFC 9381) through `curve25519-voi`, wrapped in `chain/crypto/vrf`. A round falls on the participation epoch grid every `rotation_epochs` (7) epochs and accepts submissions in the `window_blocks` (100) blocks before its rotation height. At the window's opening the pool is snapshotted: attested entities with an ACTIVE member whose aggregate stake is within the entity cap, each with **one designated submitter** (the lowest-addressed ACTIVE member holding a seasoned key). `MsgSubmitVrf` is signed by that validator's operator and the proof is verified on-chain against the snapshot key. The seed is chained (`input` of round N+1 is the seed of round N, hashed with a domain tag, the round number and the sorted verified outputs) and is computed every round; a **2/3 quorum** (`3·submitted ≥ 2·pool`, integer arithmetic) is required for a draw, otherwise the round is SKIPPED with a reason and the previous cohort stands. On quorum, a **shadow draw** of `min(22, pool)` entities is stored, emitted and queryable (`round`, `draw`, `draws`, `latest-draw`) and **read by nothing**: no keeper method returns a draw, and a test fails if a module outside `x/randomness`, `app` and `cmd/saicond` imports it. Nothing is written to stake, status, EP, rewards or tickets for not submitting. `saicond vrf keygen` and `saicond vrf show` handle the key file. Added in S8 (W2, the design notes, [ADR-0008](adr/ADR-0008-voting-power-and-selection.md)); ships in `v0.10.0` with `x/entityregistry` | ✅ shadow |
+| Stock: staking, slashing, distribution, gov, bank, IBC (**`x/mint` removed**) | Cosmos SDK v0.53.8, CometBFT v0.38.25, ibc-go v10.7.0 (ADR-0016). SDK defaults, except the slashing fractions and the consensus evidence window — relevant consequences: voting power = top-N by stake. **Slashing: downtime 0 and double-sign 10% are set in the binary** (`app/genesis.go`, the default genesis that `saicond init` and the test harness start from; `app/sim_params.json` pins them for the simulations; the genesis scripts write the same two values, and the `v0.10.0` upgrade raises a stored double-sign fraction below 10% to 10%, leaves a higher one alone and sets a positive downtime fraction to 0). **Evidence window = unbonding:** the same upgrade sets `max_age_duration` to the unbonding time (504 h) and `max_age_num_blocks` to floor(U / 6 s) = 302,400, and the genesis templates write the same values (§4 item 7a). `x/mint` is **removed from the app** (B12 executed, 29 Jul): `x/rewards` is the only module holding Minter for `nscn`, so the 21M ceiling guards every path that can create supply | ✅ slashing (§2.6) · ⚠️ other overrides pending (§2.5) |
 
 ### 1.1b Off-chain services
 
 | Service | What it does | Status |
 |---|---|---|
-| `indexer/` | follows blocks for the one fact the chain cannot answer about itself — which validator proposed which block, carried in every header and indexed by no query — and at each epoch close reads the numbers the chain computed for itself. Serves `/v1/scoreboard`, `/v1/validators/{op}`, `/v1/validators/{op}/epochs`, `/v1/status`. Recomputes nothing; absence is `NULL`, never `0`; compliance read from `x/compliance`, never the registry mirror (V-4.1). Go + SQLite (`modernc.org/sqlite`, CGO-free like the rest of the repo) | ✅ v1, gated in CI · public endpoint goes up with the devnet reset (the devnet operations runbook); the scoreboard page reads it |
+| `indexer/` | follows blocks for the one fact the chain cannot answer about itself — which validator proposed which block, carried in every header and indexed by no query — and at each epoch close reads the numbers the chain computed for itself. Serves `/v1/scoreboard`, `/v1/validators/{op}`, `/v1/validators/{op}/epochs`, `/v1/status`, `/v1/concentration`, `/v1/concentration/epochs`, `/v1/entities`. Recomputes nothing the chain computes; derives the concentration measures (top-10 share, Nakamoto by validator and by attested entity, curves) at each epoch's last block from the validator set and the registry read at that height, both stored and served (spec the design notes); absence is `NULL`, never `0`; compliance read from `x/compliance`, never the registry mirror (V-4.1). Go + SQLite (`modernc.org/sqlite`, CGO-free like the rest of the repo) | ✅ v1, gated in CI · public at scoreboard.saicon.world; the concentration endpoints (S8 W4) deploy with the `v0.10.0` upgrade; the scoreboard page reads it |
 
 It reads a node, it does not extend the chain, so nothing here is consensus-critical.
 Two things about it are operationally load-bearing: it must not point at a validator
@@ -57,9 +59,13 @@ positive and quarantine paths were green on `chain/scripts/demo-pop-cycle.sh` on
 of 2026-07-05. The JAILED branch and the governed restores (`MsgUnjail`, `MsgClearFlag`) have
 never been exercised live on either environment, and the explicit `MsgRegisterValidator` path
 is not exercised anywhere — both environments onboard through auto-create-on-bond (ADR-0004).
-The devnet runs **v0.8.0** (`dev-88f10aaf`) on the fresh genesis of its S6 reset: the stake
-caps and the queue are live there (global cap 1,680,000 SCN), with one validator; the JAILED and
-governed-restore paths above are exercised on neither environment.
+The devnet runs **v0.9.1** on the fresh genesis of its S7 reset (v0.9.0 from 22 October, upgraded
+in place on 26 October), with one validator; the JAILED and governed-restore paths above are
+exercised on neither environment. **v0.10.0 reaches it in place, not by a reset:** the `v0.10.0`
+upgrade handler adds the entity registry and the randomness module, attests the active validator
+as its own entity, migrates `x/stakeengine` and `x/compliance` to consensus version 2 and sets the
+slashing fractions and the evidence window (the devnet operations runbook,
+rehearsed natively from the v0.9.1 binary by `./scripts/rehearse-upgrade-v0.10.0.sh`).
 
 **One fresh-genesis reset carries v0.7.0 and v0.8.0 together**
 (the devnet operations runbook). On a stand built from the v0.7.0 release
@@ -75,15 +81,15 @@ devnet). On a fresh genesis the caps read `global_cap` 168,000,000,000,000 nscn 
 and `validator_cap` 200,000,000,000,000 nscn (2,000,000 SCN). The public scoreboard page reads
 them from `/saicon/chain/stakeengine/v1/caps`.
 
-v0.9.0 needs a new fresh genesis (the devnet operations runbook). The default
-keeps **one validator**: every S7 rule runs on it, and with the 2,000,000 SCN cap floor a routed
+v0.9.0 took a new fresh genesis on 22 October (the devnet operations runbook). The
+default keeps **one validator**: every S7 rule runs on it, and with the 2,000,000 SCN cap floor a routed
 delegation lands whole on that validator. The alternative is the three-validator profile —
 300,000 SCN self-bond each, `validator_cap_floor` 400,000 SCN — where a delegation of a few
 hundred thousand SCN to one validator overflows into the other two. No part of the chain
-requires a minimum number of validators. Until the reset the public node serves the earlier build.
+requires a minimum number of validators.
 
 Public devnet: 1 node (`saicon-devnet-fsn1-01`), explorer at explorer.saicon.world, open REST
-at api.saicon.world; the indexer's endpoint, scoreboard.saicon.world, goes up with the reset.
+at api.saicon.world; the indexer's endpoint at scoreboard.saicon.world.
 
 ### 1.3 Runtime invariants (EndBlock assertions that panic — fail-loud)
 
@@ -96,17 +102,44 @@ at api.saicon.world; the indexer's endpoint, scoreboard.saicon.world, goes up wi
 | V-7 | PS snapshots exist only for ACTIVE validators |
 | V-8 | EP changes only via participation (`ComputeEpoch`); punishment never mutates EP. Punishment MAY zero WARP and the **in-flight** epoch's PS snapshot — never EP, never a closed epoch's snapshot. **Revised and implemented 2026-07-28** (ADR-0010 §4): the single punishment write path is `x/participation.ZeroReputation`, and `x/compliance` structurally cannot reach `SetEP` because its `ParticipationKeeper` interface does not expose it. WARP zeroing is a no-op until the engine exists (ADR-0009). |
 | V-10 | the `stakeengine` escrow balance equals the sum of the stake queue's entries, exactly. The escrow is a blocked address, so no transfer can reach it |
+| V-12 | entity registry integrity — **halting**: (a) the member table and its by-entity index are the same relation; (b) every member's entity exists and is ATTESTED, and every ATTESTED entity has 1–8 members; (c) no validator is both a member and frozen; (d) every registry-ACTIVE validator is a member of an attested entity or carries a frozen-seat record. Clause (d) is the point: the only ways to an unattested ACTIVE seat are revocation and removal, and both write the record in the same message, so anything else — a status path that bypasses the gate, a bad genesis — halts the chain rather than pays |
+| V-13 | entity limits — **checked, not halted**: per attested entity, ACTIVE seats ≤ `max_active_seats` and aggregate stake ≤ the entity cap, both counting the frozen seats still charged to the entity. Not halted, because a governance decrease, a base move or a merge of two entities legitimately leaves an entity above its limit — it is frozen, not shed. Asserted in tests and reported by the `entity-stake` query |
+| V-14 | randomness integrity — **checked at every rotation, never halts**: the round's status and heights are consistent (`key_cutoff_height ≤ window_open_height < rotation_height`); the designated submitters are exactly the pool entries that have a validator; every submission belongs to a pool entry, was made inside `[window_open_height, rotation_height)`, and its proof re-verifies against the snapshot key and the round input to the stored output; submissions never outnumber the pool. A break skips that round's draw with the reason `V-14: …`; it does not panic, because nothing that carries coin, a seat or a status reads this module. To be revisited when S10 starts reading the seed |
+| V-15 | coordinated-attack integrity — **checked at every firing and every preview, never halts**: (a) every offence is stored under its own evidence hash, has a kind, and `x/evidence` holds that hash; (b) its consensus address is tombstoned in x/slashing; (c) the by-entity index is exactly the duplicate-vote offences that carry an entity, and a light-client-attack offence carries none; (d) every sanction's id is below the sequence, its fraction is inside the code bounds, each target's offence exists with that sanction id and entity and its classification agrees with its outcome, and every fired offence is listed by its sanction; (e) every sanctioned entity is armed; (f) every consensus key recorded as removed is tombstoned. A break refuses the firing (`ErrCoordinatedInvariant`, 1119) and the preview reports it; it does not panic, because nothing in these records carries coin, a seat or a status until a firing reads them, and the firing is where they are checked |
 | V-4.1 | metadata `compliance_flag` mirrors `x/compliance.Compliant` — ⚠ **NOT IMPLEMENTED: no invariant, no runtime check.** The mirror is best-effort: written by `x/compliance.SetCompliance`, but hardcoded `true` on the register and auto-create-on-bond paths, which never consult `x/compliance`. It can diverge undetected. The reward gate reads `x/compliance` directly, so the mirror is not load-bearing for eligibility — it IS load-bearing for the re-bond restore decision. |
 
 ### 1.4 Known gaps (honest)
 
 PS single-signal, no WARP · voting power is stock stake-weighted (no selection layer) ·
 stake caps: the backstop leaves two routes open (below) · delegation router shipped in v0.9.0 (S7),
-the weight function replaced when the S-13 run lands · no entity registry ·
+the weight function replaced when the S-13 run lands · entity registry, VRF randomness (shadow mode) and the coordinated-attack sanction built in S8 (v0.10.0), with the scope below ·
 **V-4.1 has no runtime check** (§1.3) · sentry layer designed in S3, adopted before S9, so
 validators currently run with the SDK's default open peer exchange (§2.10.2) · the DevNet runs
-v0.9.0 on one validator since 22 Oct, so multi-validator behaviour is verified on the local
-three-validator testnet, not on the DevNet.
+v0.9.1 on one validator (v0.9.0 from 22 Oct, upgraded in place on 26 Oct; the in-place upgrade to
+v0.10.0 is the devnet operations runbook), so multi-validator behaviour — the
+seat cap across validators, the VRF quorum, the coordinated-attack arming — is verified on the
+local three-validator testnet and in the app tests, not on the DevNet.
+
+**Entity registry — what the gate does not reach.** The attestation gate and the seat cap decide registry `ACTIVE` — participation score, EP, PoP rewards, router candidacy, queue fills — and not consensus: the CometBFT set is still x/staking's top 75 by stake, so a held or frozen validator that x/staking bonds signs blocks with its full voting power until the selection layer (S10, ADR-0008) removes it. Undeclared entities are bound only per validator (2% cap): an owner who never declares the validators they run earns nothing on the PoP path with them, but is not otherwise stopped; attestation makes declaration the price of income and cannot make lying impossible, and detection is the second line (ADR-0014 D4, planned, B4). The truth of an attestation is off-chain: the chain records that an attestor vouched for a document whose hash it published. The 5% entity cap binds stake intake against EWMA-30 of total bonded; the effective layer, a cap on current eligible bonded for voting power and rewards, comes with the VP layer in S10. A frozen validator that was ACTIVE when its entity was revoked, or when it was removed from it, keeps its PoP rewards until it leaves ACTIVE (spec J2); governance can demote one through the `x/compliance` evidence path. When an entity holds more than two ACTIVE seats, the seats that stay are the first two activated, provisional until ADR-0008 decides (spec J4). The ticket list is exposed by query; the lottery that consumes it is S10 (a shadow draw over the tickets runs since S8, below). The attestation formats, the limits and the upgrade are in [ADR-0014](adr/ADR-0014-entity-registry.md) and the design notes.
+
+**Coordinated-attack sanction — what it does not reach.** (`x/compliance`, S8 W3, `v0.10.0`.) The chain does not detect, prove or infer coordination: it records objective equivocations and an objective registry linkage, and governance ratifies, by a vote that names the evidence hashes, that the linked equivocations were one attack. Its reach, stated in full:
+- **Only the named double-signers are slashed.** The entity's other validators signed nothing twice and are untouched; they stay bonded and signing, and removing them from consensus is the selection layer's (S10, ADR-0008), as for the registry gate above. The sanction does not revoke the entity either; a proposal may carry `MsgRevokeEntity` next to the firing.
+- **Coordination without equivocation, and undeclared validators, are out of reach.** A cartel that withholds votes or censors without signing two conflicting votes arms nothing, and a validator that belongs to no entity cannot arm; detection is the ladder of ADR-0014 D4 (planned, B4), and attestation is the first line. Two validators of different entities that double-sign in the same block (a shared client bug) arm nothing: each receives the ordinary double-sign treatment and no more.
+- **30% is the owner's uncalibrated default** (D-S8-2; ADR-0010 §3 calls it a starting point calibrated by nothing). No study swept it; it is revisited with the B4 dataset and the Q1'27 audit. The 10% floor is itself a convention (ADR-0010 §2).
+- **Only stake still slashable is reached, and the deadline is each target's unbonding.** x/staking cannot slash a fully unbonded validator, and unbonding or redelegation entries that matured, or stake that left before the infraction, are out of reach as for every x/slashing slash. The jailed double-signer starts unbonding at its evidence block, so a sanction must execute within about 21 days of each target's evidence (the earliest target binds); a target that has reached `Unbonded` is recorded `NOT_SLASHABLE` and the others are sanctioned. The `sanction-preview` query reports `earliest_execution_time` and `slashable_until`.
+- **An offence must be accepted by `x/evidence` to arm**, and `x/evidence` refuses evidence older than the consensus evidence window. The permissionless submitter is CometBFT's evidence gossip and `broadcast_evidence`; `x/evidence`'s own `MsgSubmitEvidence` has no router on this chain and fails. The `v0.10.0` upgrade sets the window to the 21-day unbonding period (302,400 blocks and 1,814,400 s, exact while the average block interval, halts included, is at most 6 s; §4 item 7a), which meets the rule's dependency on it: an offence reported within unbonding is admissible, and one reported later is never recorded.
+- **One departure per validator is kept.** A validator that leaves two entities between its offence and the evidence block keeps only the later linkage; evidence normally lands one or two blocks after the vote.
+- **Nothing is back-filled.** An equivocation committed before `v0.10.0` had no entity at its height and never arms.
+- **On the one-validator DevNet the rule cannot arm**, since arming needs two validators of one entity. It is exercised by the application tests through real misbehaviour lists and real proposals, and becomes observable on the multi-entity testnet (S9 invite-DevNet, then Q1'27).
+
+**Randomness — what the shadow draw is not.** (`x/randomness`, S8 W2, v0.10.0.) It is the construction of ADR-0008 option (c) running on the chain, with the departures below: keys bound in the attestation, outputs verified on-chain, a chained seed, a quorum with a no-draw fail-safe and a published draw anyone can recompute from the stored pool, outputs and seed. It is not a lottery, and it does not close B11.
+
+- **No seats.** No module reads a draw. The CometBFT set is x/staking's top 75 by stake and the PoP active set is the registry's. ADR-0008's interim policy holds until B11 is chosen, implemented *and audited*; S8 delivers the second, and the third is the Q1'27 audit. The draw is the evidence that policy asks for: submission timing inside the window, the skip rate and the participation rate, measured before a seat depends on them. A structural test keeps it that way: the moment a seat depends on a draw, a test fails and the diff that fixes it is reviewed.
+- **The residual, stated as ADR-0008 states it and extended.** The VRF removes grinding by the proposer and by the submitter; it leaves a bounded residual: (1) **one bit per late designated submitter** — outputs are public once they are in a block, so an entity that submits last can compute the draw with and without its own output and choose; (2) **coalitions amplify it in full** — *k* cooperating entities choose among 2^*k* outcomes, and the registry makes undeclared coalitions costlier without being able to detect them; (3) **proposer censorship** — the proposer of a window block can leave other entities' pending submissions out of it, choosing among subsets of their outputs, and the last block of the window has no later proposer to include them; an honest client submits from the first block in which it can, so only late submitters are exposed, who hold the bit anyway; a client that polls every `INTERVAL` seconds is exposed for that long after the window opens, so at the loop's default of 30 s the exposure window equals the polling interval and the runbook recommends a low `INTERVAL` (5 s on the DevNet); ADR-0008's residual does not count this and the implementation records it; (4) **key grinding after an input is public** — closed by seasoning (a key counts in round N only if it was bound before round N−1's window opened), except after a round with no outputs from anyone but the binder's coalition; round 1 is such a round, since it admits no key and so has no outputs at all, and round 2's input is `seed_1 = Seed(1, initial_input, [])`, a function of the published initial input alone, known before any key is bound; round 2 is therefore grindable by whoever binds keys before its cutoff, which on the DevNet is the SAiCoN operator and on a network of several entities is every operator; (5) **key custody** — the chain proves that the operator account offered the key and that someone holds its secret, not that the operator alone does; (6) **the choice of the designated member** — the designation is fixed at the snapshot, after the round's input is public, so an entity with *k* seasoned keyed members can pick which of its *k* outputs counts by taking lower-addressed members out of ACTIVE before the snapshot; this buys nothing blind to other entities' outputs and multiplies the choices of a coalition whose outputs are the only ones in the round. The quorum is a fail-safe and not a defence: withholding can push a round below quorum, which skips the draw and keeps the standing cohort for a round — a lever once a draw carries seats, none in shadow mode.
+- **The DevNet exercises the machinery and proves nothing about manipulation.** It has one validator, so the quorum of 2/3 of one is one: the single designated validator must submit, its output is the round's only entropy, and with one ticket the draw always returns that ticket. Scheduling, the snapshot, verification, chaining, skips, publication and the upgrade are exercised; resistance to manipulation is not. The evidence comes from a network of many independent entities — observation in shadow mode on the multi-entity testnet, then the audit.
+- **The draw is uniform and over entities, until S10.** ADR-0008's pool is `ACTIVE ∧ C=1 ∧ WARP ≥ 65` less the Top-53, weighted by quality²; WARP (ADR-0009), the Top-53 and the quality weight belong to the selection layer (S10). The shadow draw uses attested entities with an ACTIVE member whose aggregate stake is within the entity cap, draws from the whole pool without weight, and names entities rather than the validator that would take the seat. An entity over its cap is out of the pool until it is back under; an entity frozen only for its seat count stays in.
+- **A rotation is "weekly" only at the production epoch.** A round falls every `rotation_epochs` (7) participation epochs; on the DevNet's 100-block epoch that is 700 blocks, and the production epoch length is set with B1 (§2.1).
+- **Key lifecycle.** A key counts in round N only if it was bound before round N−1's window opened, so a newly bound key waits between one and two rounds. The key file (`saicond vrf keygen`, `config/vrf_key.json`) is a separate secret from the consensus key and the operator key and is needed online once per rotation; it is backed up like the consensus key and never regenerated on a live chain, because the old key stays owned by its validator for life.
 
 **Stake caps — what the S7 backstop does not cover.** S6 checked the caps in the ante
 handler only, so messages executed by `x/group`, `x/gov` and an ICA host passed around
@@ -138,7 +171,7 @@ examined · EndBlock reads the whole queue each block while there is headroom, a
 walks it every block — fine at the 10,000-entry default, to be measured before
 `max_queue_entries` is raised toward its 100,000 bound.
 
-**Indexers and queue fills.** In SDK v0.53.6 the `delegate` event is emitted by x/staking's
+**Indexers and queue fills.** In SDK v0.53.8 (as in v0.53.6) the `delegate` event is emitted by x/staking's
 `MsgDelegate` message server, not by `Keeper.Delegate`. A queue fill calls the keeper
 directly, so it emits `queued_delegation_filled` and **no** `delegate` event: an indexer
 that tracks delegations must read both.
@@ -152,7 +185,8 @@ until 2026-08-15 it was the SDK v0.53.6 default that happened to agree, while fo
 scripts described it in comments as ours. Fixed together with the evidence window, which
 the three-node genesis had never carried at all: it ran CometBFT's stock 100,000 blocks /
 48h, the same hole DevOps is closing on the live chain. Both stands verified live —
-genesis reads 1814400s / 362880 / 1814400000000000 and the chain produces blocks ·
+genesis reads 1814400s / 362880 / 1814400000000000 and the chain produces blocks (the block count
+became 302,400 with v0.10.0, §4 item 7a) ·
 **the reward split is equal, not reputation-weighted** — `emission.go:174` divides the
 epoch pool by the count of validators passing a binary gate, so PS changes selection and
 governance but not income until brief S-18 settles the split function. Stage 5 calibrated
@@ -209,8 +243,12 @@ it cannot be brought up over existing state.
   fees still go out stake-weighted through `x/distribution`. The white paper's §8.5 describes
   the target design (ADR-0011 D6).
 - **Indexer and a same-chain-id reset.** The indexer checks the chain-id at start and refuses
-  a tip below its cursor, but a DevNet reset that keeps the chain-id and grows past the old
-  height is not detected; reset the indexer with the chain (`chain-reset` does).
+  a tip below its cursor. A DevNet reset that keeps the chain-id and grows past the old
+  height is detected once a concentration epoch is stored with its block hash: each pass re-reads
+  the block hash at the newest measured epoch that has one and stops on a difference; a database
+  with no hashed epoch, or a reset whose tip is below that height (caught by the
+  tip-below-cursor check), is covered as before; reset the indexer with the chain
+  (`chain-reset` does).
 
 ---
 
@@ -265,9 +303,14 @@ cost benchmarking: `ComputeEpoch` iterates the full validator set in one block).
   inherited rather than calibrated, and 53 + 22 is its arithmetic at 75, not a measured optimum.
   🔒 **B1 can still move the size** — it is the benchmark that settles it before MainNet.
 - **Rotation cadence: weekly** — decided in ADR-0008 (status *Proposed*), not inherited. The ADR
-  reasons from it: VRF commit-reveal costs ≈224 txs per rotation at 112 candidates, which is
-  affordable weekly and seven times less so daily; and it treats a rotation as a consensus-level
-  churn event, where the lottery alone can replace 22 of 75 seats at one height.
+  reasons from it: commit–reveal (option (b)) costs ≈224 txs per rotation at 112 candidates (two
+  per candidate), which is affordable weekly and seven times less so daily; and it treats a
+  rotation as a consensus-level churn event, where the lottery alone can replace 22 of 75 seats
+  at one height. The ≈224 figure is commit–reveal's and not the VRF's: the VRF as built (option
+  (c)) costs **one transaction per keyed pool entity** per rotation, 53,172 gas each (measured).
+  As built, a rotation falls every `rotation_epochs` (7) participation epochs, so "weekly" holds
+  only at the production epoch (≈24 h, set with B1); on the DevNet's 100-block epoch a rotation
+  is 7 × `epoch_length_blocks` = 700 blocks.
 - ⚠ **But the cadence is a gap in the Register, and that gap is load-bearing.** No Q or A row in
   Decision Register v1.0 fixes it, so the number lives only in our own ADR and was never
   reconciled back into the baseline. Two consequences:
@@ -284,9 +327,13 @@ cost benchmarking: `ComputeEpoch` iterates the full validator set in one block).
 - `VP = min(bonded, validator cap) × WARP/100 × ComplianceFlag` → normalized → ABCI
   `ValidatorUpdate`. **Rewards ∝ final VP** — no tiers, no second KPI multiplier.
 - ✅ **B11: randomness source chosen — per-validator VRF** (project decision 2026-07-28, ADR-0008;
-  the key is registered inside the B3 attestation ceremony, which has to exist anyway). Still to
-  build: there is no VRF module in Cosmos SDK v0.53.6, so the lottery still must not carry
-  consensus seats until it exists and is audited. 🔒 B1: set size 75 needs a consensus benchmark
+  the key is registered inside the B3 attestation ceremony, which has to exist anyway).
+  ✅ **implemented in shadow mode (S8, v0.10.0)**: `x/randomness`, with the key offered by the
+  operator and bound in the attestation (spec the design notes,
+  ADR-0008 "Implementation (S8, October 2026)"). There is no VRF module in Cosmos SDK v0.53.8 (nor in v0.53.6); this
+  one is ours, and the lottery still must not carry consensus seats until it is audited (Q1'27).
+  The draw is shadow: it awards nothing and is read by nothing; what it leaves open is §1.4,
+  "Randomness — what the shadow draw is not". 🔒 B1: set size 75 needs a consensus benchmark
   before MainNet.
   *Honesty: the 70/30 split was inherited, not calibrated (Stage 2's own sensitivity favoured
   80/20); the Stage 2 grid falls monotonically with size (50→94.2 quality, 60→93.4, 75→91.9,
@@ -322,7 +369,7 @@ Three things worth carrying rather than filing:
 - **The cadence gap above is what conditions the size comparison.** Turnover is a rate, so 60-vs-75
   was compared without a stated rotation cadence.
 
-### 2.4 Entry, caps & entity controls — ✅ caps and queue (S6) · 🔜 entity registry
+### 2.4 Entry, caps & entity controls — ✅ caps and queue (S6) · ✅ entity registry (S8)
 
 - **Entry counts owner self-bond only** (delegations never count). Floor **2,000 SCN**
   at 112 candidates; adaptive ladder retained under 🔒 governance review.
@@ -340,10 +387,31 @@ Three things worth carrying rather than filing:
   it stops accepting new stake — rather than force-shed. The floor keeps delegation
   possible while the set is small; 0 in code, 2,000,000 SCN on the devnet.
   🔒 B5: the >35% Top-10 rebalancing trigger exists as a name only — mechanism to design.
-- **Entity caps: 5% aggregate stake · max 2 active seats · 1 lottery ticket.**
-  🔒 **B3: beneficial-owner attestation BEFORE first activation** — detection is the second
+- ✅ **Entity caps: 5% aggregate stake · max 2 active seats · 1 lottery ticket** (S8, `x/entityregistry`
+  and `x/stakeengine`, v0.10.0). A validator is a member of at most one entity; an attestor from the
+  governed list in `x/entityregistry` params attests the entity (id, display name, hash of the
+  off-chain document, 1–8 validators), and only then can a member become ACTIVE. The **5% aggregate** is
+  `max(entity_cap_fraction × EWMA-30(total bonded), entity_cap_floor)` — the same base as the 2%
+  validator cap — summed over every member in every bond status, and applied on every path stake can
+  take into a member (ante, staking hooks, queue fill, router). The **seat cap** is the gate's:
+  the third member waits at BONDING and is promoted when a seat frees. A **frozen seat is charged to
+  its former entity** — its seat in the count and its tokens in the aggregate — for as long as its
+  validator stays ACTIVE, because it keeps earning; so re-attesting an entity with fresh validators,
+  or revoking and re-attesting it, does not give one owner a third seat or a second 5%. The charge
+  ends when the frozen validator leaves ACTIVE. The **ticket** is a query
+  row per attested entity. Parameters: `attestors` (≤ 10, unique; tier 1), `max_active_seats`
+  (default 2, bound [1, 3]), `entity_cap_fraction` (default 0.05, bound [0.02, 0.10] and ≥ the
+  validator fraction), `entity_cap_floor` (default 0, bound [`validator_cap_floor`, 5,250,000 SCN]).
+  Over a limit an entity is frozen — it takes no new stake and its members cannot activate — and
+  nobody is shed. Moving stake between two members of one entity is not growth. A delegation into an
+  entity costs 178,814 gas for a one-member entity, about 10% under the 200,000 default, and 202,600
+  for an 8-member one, which exceeds it (a lower bound: the measurement used seven non-existent
+  members); `create-validator` costs 203,389 (197,780 on v0.9.1), also over the default; clients
+  should use `--gas auto`, or at least 300,000 (spec §23.2).
+  **B3: beneficial-owner attestation BEFORE first activation** — detection is the second
   line: Stage 7 measured 13–84 days of attacker VP above 33% before containment (P95
-  detection day 85–128). Delegator-side: split across **max 3 validators**.
+  detection day 85–128). The on-chain gate, the seat cap and the aggregate are built; their reach
+  is stated in §1.4. Delegator-side: split across **max 3 validators**.
 
 ### 2.5 Emission, rewards & gas — 🔜 (Q3 priority; MainNet-blocked)
 
@@ -393,13 +461,13 @@ Three things worth carrying rather than filing:
 - ⚠ Owner sign-off needed on Q2: the management questionnaire answered "pre-funded pool";
   the Register (and all studies) assume issuance+fees. Conflict must be closed explicitly.
 
-### 2.6 Slashing — 🔜 (config overrides + ADR-0010)
+### 2.6 Slashing — ✅ fractions, V-8, coordinated-attack tier (S8) · 🚧 downtime window and common-outage exemption (ADR-0010 §1)
 
 | Event | Rule (Register) | Today in code | Work |
 |---|---|---|---|
-| Ordinary downtime | **Phase 1: zero stake slash** — WARP reduction, reward loss, jail/ineligibility; rolling signed-block window; confirmed common outage exempt | **0 — applied** in the genesis templates (ADR-0010, owner 2026-07-28) | ✅ done |
-| Double-sign | **10% of bonded** + WARP/PS→0 + C=0 + jail + **permanent tombstone** | **0.10 — applied**; C=0 + jail + tombstone ✅ | ✅ fraction done; WARP/PS→0 still needs the **V-8 revision** (ADR-0010 §4, proposed) |
-| Proven coordinated attack | separate, heavier evidence-based rule | — | ADR-0010 |
+| Ordinary downtime | **Phase 1: zero stake slash** — WARP reduction, reward loss, jail/ineligibility; rolling signed-block window; confirmed common outage exempt | **0 — applied** in the genesis templates (ADR-0010, owner 2026-07-28) and, since 2026-10-28, in the binary's default genesis (`app/genesis.go`); the `v0.10.0` upgrade sets a positive stored value to 0 | ✅ done |
+| Double-sign | **10% of bonded** + WARP/PS→0 + C=0 + jail + **permanent tombstone** | **0.10 — applied** in the genesis templates and, since the owner's decision of 2026-10-28, **in the binary**: the default genesis carries it and the `v0.10.0` upgrade raises a lower stored fraction to 10% (a higher one is left alone); C=0 + jail + tombstone ✅ | ✅ fraction done; WARP/PS→0 via the **V-8 revision**, implemented 2026-07-28 (ADR-0010 §4: `ZeroReputation`, EP never touched) |
+| Proven coordinated attack | separate, heavier evidence-based rule | **Two-key rule, built:** duplicate-vote evidence for ≥ 2 validators linked to one attested entity **arms**; a governance proposal naming the evidence hashes **fires**, after a 7-day appeal window counted from the later of the arming and the latest named offence. Each named double-signer's total burn is `coordinated_attack_fraction` (default 0.30, bound [0.10, 1.00]) of its stake at the infraction height; JAILED, tombstone, event 6, EP untouched. No K-of-W path over unrelated validators. §1.4 states what it does not reach | ✅ S8 (v0.10.0): ADR-0010 §3 + D-S8-2 |
 
 ### 2.7 Compliance ladder & appeal — 🟡
 
@@ -414,8 +482,8 @@ state them together). 🔒 B4: detector calibration needs a real entity-labelled
 
 ### 2.8 Delegation — ✅ (`x/delegationrouter`, S7; ADR-0005)
 
-Shipped in v0.9.0 (S7); the public DevNet serves it after
-its reset (the devnet operations runbook), not before.
+Shipped in v0.9.0 (S7); the public DevNet serves it since its reset on 22 October
+(the devnet operations runbook).
 
 - ✅ **`MsgDelegateRouted { delegator, validator, amount }`.** The chosen validator is the
   primary and is filled up to `validator_cap − tokens`. The remainder goes to at most
@@ -426,7 +494,7 @@ its reset (the devnet operations runbook), not before.
   leg. If the legs cannot place the amount the message fails with `ErrNoRoute` naming what
   fits. The weight is a **design choice under research**: brief S-13 (the executed
   allocation comparison) has no run in the archive, and the function is one body so a
-  measured result replaces it alone. `entityAllows` returns true until S8's entity registry.
+  measured result replaces it alone. Since S8 a leg's room is the smaller of the validator's and its entity's, a frozen validator has none, the plan places at most one leg per entity (the heaviest candidate), and no overflow leg goes to the primary's own entity, whose room the primary already shares.
 - ✅ **The global cap is honoured in the same message.** Legs execute in order, each taking
   what headroom allows directly; the part above headroom becomes a queue entry on that leg's
   validator (the S6 queue, without its entry floor for routed remainders). All or nothing.
@@ -472,6 +540,12 @@ DAO **may** tune: PS weights, WARP params, epoch length, cap percentages, commis
 versioned, within bounds. DAO may **not**: lower the entry floor, bypass/disable the
 participation layer, override slashing, reset a tombstone. PoP is not governance-capturable.
 
+**Entity registry parameters (S8), by tier.** *Tier 1:* `x/entityregistry.attestors` — at most 10, unique, `saicon1…` addresses; the type bounds it and the content is policy, which makes it a lever on admission: whoever governance lists can admit validators to income. *Tier 2:* `x/entityregistry.max_active_seats` [1, 3]; `x/stakeengine.entity_cap_fraction` [0.02, 0.10], and not below `validator_cap_fraction`; `x/stakeengine.entity_cap_floor` [`validator_cap_floor`, 5,250,000 SCN] — each enforced in the owning module's `Params.Validate()`. *Tier 3:* one ticket per entity, `MaxMembersPerEntity = 8`, and the gate itself (there is no parameter that turns it off). ADR-0013's tables name the older parameters; these are the S8 additions.
+
+**Randomness parameters (S8 W2), by tier.** *Tier 2:* `x/randomness.rotation_epochs` [1, 28] (default 7) and `x/randomness.window_blocks` [10, 200,000] (default 100), each enforced in the module's `Params.Validate()`; a change takes effect from the next round and never moves the running one. *Tier 3:* the quorum (`QuorumNumerator = 2`, `QuorumDenominator = 3`), the 22 shadow seats, the draw history (`MaxDrawHistory = 52` rounds), the verification gas (`VerifyGas = 2,000`), the suite and the formats of the alpha, the seed and the draw. Governance moves the cadence and the window and nothing that decides how much randomness is enough. ADR-0013's tables name the older parameters; these are the S8 additions.
+
+**Coordinated-attack parameters (S8 W3), by tier.** *Tier 2:* `x/compliance.coordinated_attack_fraction` — default 0.30, bound [0.10, 1.00] inclusive, enforced in `Params.Validate()` and again in `MsgFireCoordinatedSanction.ValidateBasic` and the plan (bounds first, then equality with the parameter); it is also refused below the chain's current `slash_fraction_double_sign` (a stateful check, made in `MsgUpdateParams` and in the plan, not in `Validate()`), so a tier-1 raise of the double-sign fraction above it blocks firing until it is raised. `x/compliance.appeal_window_seconds` — default 604,800 (7 days), bound [86,400, 1,209,600]. *Tier 3:* the bounds themselves (`CoordinatedFractionFloor() = 0.10`, `CoordinatedFractionCeiling() = 1.00`, `MinAppealWindowSeconds`, `MaxAppealWindowSeconds`); the arming rule (duplicate votes of at least two distinct validators linked to one entity, nothing else, and no K-of-W path); the evidence hash definition (`x/evidence`'s own key, 64 uppercase hex); `MaxEvidenceHashesPerSanction = 16`. Firing inside code bounds is an application of slashing policy; moving the bounds or forgiving a slash is an override and stays forbidden (ADR-0013 D5). No message in this chain refunds a burn, clears a tombstone or unjails a tombstoned validator. ADR-0013's tables name the older parameters; these are the S8 additions.
+
 **Three tier-1 parameters contradict the sentence above** — found 2026-08-15 while writing
 ADR-0013, by reading the parameter surface rather than the Register. `epoch_length_blocks = 0`
 disables the epoch tick, and with it every score, all EP accrual and all emission;
@@ -492,7 +566,7 @@ question behind it.
 | `pruning` | `custom` | `nothing` |
 | `pruning-keep-recent` | `100000` | — |
 | `pruning-interval` | `10` | — |
-| `min-retain-blocks` | `362880` (the evidence window) | `0` (never) |
+| `min-retain-blocks` | `302400` (the evidence window, 21 days / 6 s) | `0` (never) |
 | `snapshot-interval` | `1000` | `1000` |
 | `snapshot-keep-recent` | `2` | `2` |
 
@@ -503,7 +577,11 @@ Two constraints bind those numbers, and neither is enforced by the SDK:
 - `min-retain-blocks` cannot go below the evidence window whatever is configured.
   `baseapp.GetBlockRetentionHeight` takes the minimum of the evidence, snapshot and local
   constraints, so consensus safety wins over disk. It is set to the window explicitly rather
-  than left implied — **21 days of blocks is the floor, not a choice.**
+  than left implied — **`max_age_num_blocks` of blocks is the floor, not a choice.** Since the
+  window rule of §4 item 7a that is 302,400 blocks, about 17.5 days at the measured 5.01 s
+  block. Evidence stays verifiable for the full 21 days: CometBFT's block pruning keeps the
+  headers, commits and validator sets of every height whose evidence has not expired (both
+  limits), and removes only the block bodies older than the floor.
 
 **Applied on every start, deliberately.** These are `app.toml` settings, not genesis, so a node
 that already has a chain directory adopts the policy by restarting — no state reset, no
@@ -560,7 +638,7 @@ the archive re-applied the policy without a resync, which is the claim this sect
 applying on every start.
 
 **Planned next on the same bench:** the long-run behaviour. A validator keeps 100,000 state
-versions and 362,880 blocks, so watching a validator's disk stay flat while an archive's grows
+versions and 302,400 blocks, so watching a validator's disk stay flat while an archive's grows
 needs a chain past the retention floor — a soak run alongside the DevNet sizing window rather
 than a minutes-long one. The check was confirmed to fail when a value is broken by hand, so its
 passing is evidence rather than silence.
@@ -849,7 +927,7 @@ strength is uneven — presented here so no reader mistakes a convention for a p
 | ADR | Topic | Status |
 |---|---|---|
 | 0001 | Use Cosmos SDK | accepted |
-| 0002 | Toolchain version pin | accepted |
+| 0002 | Toolchain version pin | accepted (SDK and CometBFT rows amended by ADR-0016) |
 | 0003 | Validator status enum | accepted |
 | 0004 | Validator activation model | accepted |
 | 0005 | Delegation router | accepted (built in S7) |
@@ -857,10 +935,11 @@ strength is uneven — presented here so no reader mistakes a convention for a p
 | 0007 | On-chain / off-chain / contract cost split | accepted |
 | 0008 | VP formula + selection layer + **randomness (B11)** | **proposed** (written 2026-07-28) |
 | 0009 | Multi-signal PS + WARP engine | **proposed** (written 2026-07-28) |
-| 0010 | Slashing config + **V-8 revision** + attack rule | **proposed** (written 2026-07-28) |
+| 0010 | Slashing config + **V-8 revision** + attack rule | **accepted** (written 2026-07-28; §3 decided by D-S8-2, 2026-10-28, and implemented in S8, v0.10.0; V-8 implemented 2026-07-28; §1's window value and common-outage exemption open 🚧) |
 | 0011 | Emission: clip budget, gas offset, single mint path, 21M | **proposed** (written 2026-07-28) |
 | 0012 | Caps & stakeengine: tiers, queue, cap base, public-supply measurement, B5 | **proposed** (written 2026-07-28) |
 | 0013 | Bounded DAO authority: three tiers, and where each bound is enforced | **proposed** (written 2026-08-15) |
-| 0014 | Entity registry: attestation before activation, evidence ladder, appeal | **proposed** (written 2026-08-15) |
+| 0014 | Entity registry: attestation before activation, evidence ladder, appeal | **accepted** (D1–D3 implemented in S8, v0.10.0; D4–D5 planned, B4) |
 | 0015 | Sentry layout: exposure as an axis of its own, and the signing node off the open internet | **proposed** (written 2026-08-27) |
+| 0016 | Cosmos SDK v0.53.8 / CometBFT v0.38.25 / ibc-go v10.7.0 patch, riding the v0.10.0 upgrade | **accepted** (2026-10-28) |
 

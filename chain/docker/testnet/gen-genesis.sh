@@ -72,6 +72,20 @@ for i in 0 1 2; do
   saicond genesis add-genesis-account "${ADDR}" "${GENESIS_AMOUNT}" --home /data/node0
 done
 
+# The testnet's one attestor (project decision D-S8-1): a key in node0's keyring and
+# a 1,000 SCN genesis account, so it can sign MsgAttestEntity for later validators.
+# It is added before node0's genesis is copied into the other homes and before the
+# gentxs, which validate against the genesis they are given.
+saicond keys add attestor --no-backup \
+  --keyring-backend "${KEYRING}" \
+  --keyring-dir "${KEYRING_DIR}" \
+  --home /data/node0
+ATTESTOR_ADDR="$(saicond keys show attestor -a \
+  --keyring-backend "${KEYRING}" \
+  --keyring-dir "${KEYRING_DIR}" \
+  --home /data/node0)"
+saicond genesis add-genesis-account "${ATTESTOR_ADDR}" 100000000000nscn --home /data/node0
+
 # 3. each node creates its gentx against the canonical (3-account) genesis.
 #    copy node0's genesis into each home first so the gentx validates.
 for i in 0 1 2; do
@@ -151,13 +165,17 @@ fi
 
 # --- unbonding period and the evidence window (Register v1.0, V-5) -----------
 # Both here, because they are one decision: CometBFT expires evidence only when
-# BOTH limits are passed (evidence/pool.go isExpired uses &&), so the longer
-# governs. Stock is 100,000 blocks and 48h — at a 5s block that is 5.8 days
-# against a 21-day unbonding period, fifteen days in which a proven double-signer
-# is unpunishable while the stake is still bonded. The single-node path has
-# carried this since 12 Aug; this path never did.
+# BOTH limits are passed (evidence/pool.go isExpired uses &&), so the window is
+# max(blocks x block time, duration). Stock is 100,000 blocks and 48h — 5.8 days
+# at the measured 5.01s block against a 21-day unbonding period, fifteen days in
+# which a proven double-signer is unpunishable while the stake is still bonded.
+# The window is the unbonding period and no longer (owner 2026-10-29; the v0.10.0
+# upgrade applies the same rule, app/upgrades.go evidenceWindow): duration 21
+# days and floor(21 days / 6s) = 302,400 blocks, so it is exactly 21 days while
+# the average block interval, halts included, is at most 6s. A longer window lets old evidence reach a validator
+# re-created on the key after its unbonding completed.
 UNBONDING_SECONDS=1814400                     # 21 days (V-5)
-EVIDENCE_BLOCKS=$(( UNBONDING_SECONDS / 5 ))  # 362,880 at a 5s block
+EVIDENCE_BLOCKS=$(( UNBONDING_SECONDS / 6 ))  # 302,400: the window stays 21 days at an average block interval up to 6s
 
 jq --arg u "${UNBONDING_SECONDS}s" \
    --arg n "${EVIDENCE_BLOCKS}" \
@@ -166,6 +184,52 @@ jq --arg u "${UNBONDING_SECONDS}s" \
     | .consensus.params.evidence.max_age_num_blocks = $n
     | .consensus.params.evidence.max_age_duration = $d' \
   "${GENESIS_FILE}" > "${GENESIS_FILE}.tmp" && mv "${GENESIS_FILE}.tmp" "${GENESIS_FILE}"
+
+# --- entity registry (S8, ADR-0014) -------------------------------------------
+# The activation gate admits a validator to ACTIVE only as a member of an attested
+# entity, and x/entityregistry's genesis runs before the gentxs bond the
+# validators, so each one needs its entity in genesis or it is held at BONDING and
+# nothing earns. One entity per validator, attested by the key made above, hash =
+# SHA-256 of a fixed text (there is no off-chain document for a testnet node).
+# entity_cap_floor = 400,000 SCN, the validator floor set above.
+#
+# VRF keys (S8 W2, spec §17): each validator also gets a VRF key, bound in genesis
+# with its owner entry, and the initial input of round 1 is drawn after the keys
+# exist, so no key could have been chosen against it. The key files stay in the
+# node homes (mode 0600).
+#
+# The rows are collected tab-separated in the loop (id, display name, hash,
+# valoper, vrf public key), then each array is built by one jq call.
+ROWS=""
+for i in 0 1 2; do
+  VALOPER="$(saicond keys show "val${i}" --bech val -a \
+    --keyring-backend "${KEYRING}" \
+    --keyring-dir "${KEYRING_DIR}" \
+    --home "/data/node${i}")"
+  ENTITY_HASH="$(printf '%s' "SAiCoN testnet node${i} entity: genesis attestation" | sha256sum | cut -d' ' -f1)"
+  VRF_KEY_FILE_I="/data/node${i}/config/vrf_key.json"
+  [ -f "${VRF_KEY_FILE_I}" ] || saicond vrf keygen --output "${VRF_KEY_FILE_I}" --home "/data/node${i}" >/dev/null
+  VRF_PK_I="$(saicond vrf show --vrf-key-file "${VRF_KEY_FILE_I}")"
+  ROWS+="saicon-testnet-node${i}"$'\t'"SAiCoN testnet node${i}"$'\t'"${ENTITY_HASH}"$'\t'"${VALOPER}"$'\t'"${VRF_PK_I}"$'\n'
+done
+INITIAL_INPUT="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+ENTITIES="$(jq -Rnc --arg att "${ATTESTOR_ADDR}" \
+  '[inputs | select(length > 0) | split("\t") | {"id":.[0],"display_name":.[1],"attestation_hash":.[2],"attestor":$att,"status":"ENTITY_STATUS_ATTESTED","attested_height":"1"}]' \
+  <<<"${ROWS}")"
+MEMBERS="$(jq -Rnc \
+  '[inputs | select(length > 0) | split("\t") | {"validator":.[3],"entity_id":.[0],"attested_height":"1","vrf_public_key":.[4],"vrf_key_height":"0"}]' <<<"${ROWS}")"
+OWNERS="$(jq -Rnc \
+  '[inputs | select(length > 0) | split("\t") | {"vrf_public_key":.[4],"validator":.[3]}]' <<<"${ROWS}")"
+jq --arg att "${ATTESTOR_ADDR}" --argjson entities "${ENTITIES}" --argjson members "${MEMBERS}" \
+   --argjson owners "${OWNERS}" --arg in "${INITIAL_INPUT}" \
+   '.app_state.entityregistry.params.attestors = [$att]
+    | .app_state.entityregistry.entities = $entities
+    | .app_state.entityregistry.members = $members
+    | .app_state.entityregistry.vrf_key_owners = $owners
+    | .app_state.randomness.initial_input = $in
+    | .app_state.stakeengine.params.entity_cap_floor = "40000000000000"' \
+  "${GENESIS_FILE}" > "${GENESIS_FILE}.tmp" && mv "${GENESIS_FILE}.tmp" "${GENESIS_FILE}"
+echo "[gen-genesis] entityregistry attestor=${ATTESTOR_ADDR}, entities saicon-testnet-node0..2, VRF keys bound"
 
 
 saicond genesis validate-genesis --home /data/node0

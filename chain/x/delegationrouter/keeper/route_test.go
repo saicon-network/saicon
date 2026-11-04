@@ -492,3 +492,114 @@ func TestTinyOverflowLegIsFolded(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []types.Leg{{Validator: p.String(), Amount: nscn(1000)}, {Validator: a.String(), Amount: nscn(5000)}}, r.Direct)
 }
+
+func TestEntityRoomBoundsThePrimaryLeg(t *testing.T) {
+	f := newFixture(t)
+	p := f.addVal(1, 0, "0.9") // validator room: the full cap
+	f.entity(p, "x", 30)
+	a := f.addVal(2, 400_000, "0.9")
+
+	r, err := f.k.Plan(f.ctx, acc(9), p, nscn(100))
+	require.NoError(t, err)
+	require.Equal(t, []types.Leg{{Validator: p.String(), Amount: nscn(30)}, {Validator: a.String(), Amount: nscn(70)}}, r.Direct)
+}
+
+func TestOverflowNeverGoesToThePrimarysEntity(t *testing.T) {
+	f := newFixture(t)
+	p := f.addVal(1, 0, "0.9")
+	f.room(p, 100_000)
+	f.entity(p, "x", 500_000)
+	sibling := f.addVal(2, 100, "0.9")
+	f.entity(sibling, "x", 500_000)
+	other := f.addVal(3, 400_000, "0.9")
+
+	r, err := f.k.Plan(f.ctx, acc(9), p, nscn(150_000))
+	require.NoError(t, err)
+	require.Equal(t, []string{p.String(), other.String()}, ops(r.Direct))
+	require.NotContains(t, ops(r.Direct), sibling.String())
+}
+
+func TestOverflowTakesOneValidatorPerEntity(t *testing.T) {
+	f := newFixture(t)
+	p := f.addVal(1, 0, "0.9")
+	f.room(p, 100_000)
+	light := f.addVal(2, 800_000, "0.9") // weight 0.9*200k/800k
+	heavy := f.addVal(3, 100_000, "0.9") // weight 0.9*900k/100k
+	f.entity(light, "y", 500_000)
+	f.entity(heavy, "y", 500_000)
+
+	r, err := f.k.Plan(f.ctx, acc(9), p, nscn(150_000))
+	require.NoError(t, err)
+	require.Equal(t, []string{p.String(), heavy.String()}, ops(r.Direct), "the heavier of the entity's two")
+	require.Equal(t, nscn(150_000), sum(r.Direct))
+}
+
+func TestFrozenValidatorsTakeNothing(t *testing.T) {
+	t.Run("a frozen candidate is excluded", func(t *testing.T) {
+		f := newFixture(t)
+		p := f.addVal(1, 0, "0.9")
+		f.room(p, 100_000)
+		frozen := f.addVal(2, 100, "0.9")
+		ok := f.addVal(3, 400_000, "0.9")
+		f.freeze(frozen)
+
+		r, err := f.k.Plan(f.ctx, acc(9), p, nscn(150_000))
+		require.NoError(t, err)
+		require.Equal(t, []string{p.String(), ok.String()}, ops(r.Direct))
+	})
+	t.Run("a frozen primary takes nothing and everything overflows", func(t *testing.T) {
+		f := newFixture(t)
+		p := f.addVal(1, 0, "0.9")
+		f.freeze(p)
+		a := f.addVal(2, 400_000, "0.9")
+
+		r, err := f.k.Plan(f.ctx, acc(9), p, nscn(150_000))
+		require.NoError(t, err)
+		require.Equal(t, []types.Leg{{Validator: a.String(), Amount: nscn(150_000)}}, r.Direct)
+	})
+}
+
+func TestCandidateLegIsBoundedByItsEntityRoom(t *testing.T) {
+	f := newFixture(t)
+	p := f.addVal(1, 0, "0.9")
+	f.room(p, 100_000)
+	c := f.addVal(2, 100, "0.9") // validator room is nearly the full cap
+	f.entity(c, "y", 10)
+
+	r, err := f.k.Plan(f.ctx, acc(9), p, nscn(150_000))
+	require.ErrorIs(t, err, types.ErrNoRoute)
+	require.Equal(t, nscn(100_010), r.Fits, "the primary's room plus the candidate's 10 SCN of entity room")
+
+	r, err = f.k.Plan(f.ctx, acc(9), p, nscn(100_010))
+	require.NoError(t, err)
+	require.Equal(t, nscn(10), r.Direct[1].Amount)
+}
+
+func TestPreviewIsTheMessageUnderAnEntityCap(t *testing.T) {
+	f := newFixture(t)
+	p := f.addVal(1, 0, "0.9")
+	f.entity(p, "x", 30)
+	a := f.addVal(2, 400_000, "0.9")
+	f.engine.headroom = nscn(50)
+
+	qs := keeper.NewQueryServerImpl(f.k)
+	prev, err := qs.Route(f.ctx, &types.QueryRouteRequest{Delegator: acc(9).String(), Validator: p.String(), Amount: nscn(100).String()})
+	require.NoError(t, err)
+	require.Empty(t, prev.Reason)
+	require.Len(t, prev.Legs, 2)
+	require.Equal(t, p.String(), prev.Legs[0].Validator)
+	require.Equal(t, a.String(), prev.Legs[1].Validator)
+	require.Equal(t, nscn(30), prev.Legs[0].Amount)
+
+	ms := keeper.NewMsgServerImpl(f.k)
+	res, err := ms.DelegateRouted(f.ctx, &types.MsgDelegateRouted{
+		Delegator: acc(9).String(), Validator: p.String(), Amount: sdk.NewCoin(types.BondDenom, nscn(100)),
+	})
+	require.NoError(t, err)
+	require.Len(t, f.stk.calls, len(prev.Legs))
+	for i, l := range prev.Legs {
+		require.Equal(t, l, res.Legs[i])
+		require.Equal(t, l.Validator, f.stk.calls[i].validator.String())
+		require.Equal(t, l.Amount, f.stk.calls[i].amount)
+	}
+}

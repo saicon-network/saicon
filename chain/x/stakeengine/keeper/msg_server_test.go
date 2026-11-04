@@ -38,12 +38,18 @@ func TestMsgUpdateParams(t *testing.T) {
 
 	p := types.DefaultParams()
 	p.ValidatorCapFloor = nscn(2_000_000)
+	p.EntityCapFloor = nscn(2_000_000) // the entity floor may not sit below the validator floor
 	_, err := ms.UpdateParams(f.ctx, &types.MsgUpdateParams{Authority: acc(1).String(), Params: p})
 	require.ErrorIs(t, err, types.ErrInvalidSigner)
 
 	bad := p
 	bad.MaxSupplyFraction = types.DefaultParams().MaxSupplyFraction.MulInt64(2) // 0.16, above the 0.10 bound
 	_, err = ms.UpdateParams(f.ctx, &types.MsgUpdateParams{Authority: gov, Params: bad})
+	require.Error(t, err)
+
+	belowFloor := p
+	belowFloor.EntityCapFloor = nscn(1_999_999)
+	_, err = ms.UpdateParams(f.ctx, &types.MsgUpdateParams{Authority: gov, Params: belowFloor})
 	require.Error(t, err)
 
 	_, err = ms.UpdateParams(f.ctx, &types.MsgUpdateParams{Authority: gov, Params: p})

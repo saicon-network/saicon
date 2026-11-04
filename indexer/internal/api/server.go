@@ -27,6 +27,9 @@ func New(s *store.Store, chainID string, tip func(context.Context) (int64, error
 	mux.HandleFunc("GET /v1/scoreboard", srv.scoreboard)
 	mux.HandleFunc("GET /v1/validators/{operator}", srv.validator)
 	mux.HandleFunc("GET /v1/validators/{operator}/epochs", srv.epochs)
+	mux.HandleFunc("GET /v1/concentration", srv.concentration)
+	mux.HandleFunc("GET /v1/concentration/epochs", srv.concentrationEpochs)
+	mux.HandleFunc("GET /v1/entities", srv.entities)
 	return mux
 }
 

@@ -47,7 +47,7 @@ func BenchmarkFullAppSimulation(b *testing.B) {
 			appOptions.SetDefault(key, value)
 		}
 	}
-	appOptions.SetDefault(flags.FlagHome, DefaultNodeHome)
+	appOptions.SetDefault(flags.FlagHome, b.TempDir())
 
 	app := New(logger, db, nil, true, appOptions, interBlockCacheOpt(), baseapp.SetChainID(SimAppChainID))
 

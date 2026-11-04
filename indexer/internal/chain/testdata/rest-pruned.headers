@@ -1,0 +1,8 @@
+HTTP/1.1 500 Internal Server Error
+Content-Type: application/json
+Trailer: Grpc-Trailer-Content-Type
+X-Server-Time: 1793251378
+Date: Thu, 29 Oct 2026 05:22:58 GMT
+Transfer-Encoding: chunked
+
+Grpc-Trailer-Content-Type: application/grpc+cosmos-sdk-grpc-codec

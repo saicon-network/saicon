@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"cosmossdk.io/collections"
 	"github.com/cosmos/cosmos-sdk/types/bech32"
 
 	"github.com/saicon-network/saicon/chain/x/compliance/types"
@@ -36,6 +37,45 @@ func (k Keeper) InitGenesis(ctx context.Context, genState types.GenesisState) er
 		}
 	}
 
+	for i, o := range genState.Offences {
+		hash, err := types.ParseEvidenceHash(o.EvidenceHash)
+		if err != nil {
+			return fmt.Errorf("compliance genesis: offences[%d]: %w", i, err)
+		}
+		if err := k.Offences.Set(ctx, hash, o); err != nil {
+			return fmt.Errorf("compliance genesis: offences[%d] (%s): %w", i, o.EvidenceHash, err)
+		}
+		// The by-entity index is not exported; it is the duplicate-vote offences
+		// that carry an entity.
+		if o.Kind == types.MisbehaviorKind_MISBEHAVIOR_KIND_DUPLICATE_VOTE && o.EntityId != "" {
+			if err := k.OffencesByEntity.Set(ctx, collections.Join(o.EntityId, hash)); err != nil {
+				return fmt.Errorf("compliance genesis: offences[%d] (%s): index: %w", i, o.EvidenceHash, err)
+			}
+		}
+	}
+
+	for i, s := range genState.Sanctions {
+		if err := k.Sanctions.Set(ctx, s.Id, s); err != nil {
+			return fmt.Errorf("compliance genesis: sanctions[%d] (%d): %w", i, s.Id, err)
+		}
+	}
+
+	consCodec := k.stakingKeeper.ConsensusAddressCodec()
+	for i, addr := range genState.RemovedConsensusAddresses {
+		cons, err := consCodec.StringToBytes(addr)
+		if err != nil {
+			return fmt.Errorf("compliance genesis: removed_consensus_addresses[%d] (%s): %w", i, addr, err)
+		}
+		if err := k.RemovedConsensus.Set(ctx, cons); err != nil {
+			return fmt.Errorf("compliance genesis: removed_consensus_addresses[%d] (%s): %w", i, addr, err)
+		}
+	}
+
+	// 0 reads as 1: the first sanction is 1.
+	if err := k.SanctionSeq.Set(ctx, genState.EffectiveNextSanctionID()); err != nil {
+		return fmt.Errorf("compliance genesis: sanction sequence: %w", err)
+	}
+
 	return nil
 }
 
@@ -65,6 +105,50 @@ func (k Keeper) ExportGenesis(ctx context.Context) (*types.GenesisState, error) 
 		}
 		genesis.ComplianceStates = append(genesis.ComplianceStates, cs)
 	}
+
+	oIter, err := k.Offences.Iterate(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = oIter.Close() }()
+	for ; oIter.Valid(); oIter.Next() {
+		o, err := oIter.Value()
+		if err != nil {
+			return nil, err
+		}
+		genesis.Offences = append(genesis.Offences, o)
+	}
+
+	sIter, err := k.Sanctions.Iterate(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = sIter.Close() }()
+	for ; sIter.Valid(); sIter.Next() {
+		s, err := sIter.Value()
+		if err != nil {
+			return nil, err
+		}
+		genesis.Sanctions = append(genesis.Sanctions, s)
+	}
+
+	consCodec := k.stakingKeeper.ConsensusAddressCodec()
+	if err := k.RemovedConsensus.Walk(ctx, nil, func(cons []byte) (bool, error) {
+		addr, err := consCodec.BytesToString(cons)
+		if err != nil {
+			return true, err
+		}
+		genesis.RemovedConsensusAddresses = append(genesis.RemovedConsensusAddresses, addr)
+		return false, nil
+	}); err != nil {
+		return nil, err
+	}
+
+	next, err := k.SanctionSeq.Peek(ctx)
+	if err != nil {
+		return nil, err
+	}
+	genesis.NextSanctionId = next
 
 	return genesis, nil
 }

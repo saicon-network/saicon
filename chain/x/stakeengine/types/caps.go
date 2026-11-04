@@ -29,6 +29,12 @@ func ValidatorCap(p Params, ewma math.LegacyDec) math.Int {
 	return math.MaxInt(byFraction, p.ValidatorCapFloor)
 }
 
+// EntityCap is max(entity_cap_fraction × ewma, entity_cap_floor): the same base
+// as ValidatorCap (ADR-0012 Stage 11).
+func EntityCap(p Params, ewma math.LegacyDec) math.Int {
+	return math.MaxInt(p.EntityCapFraction.Mul(ewma).TruncateInt(), p.EntityCapFloor)
+}
+
 // PublicCirculating is supply minus what is not publicly owned, floored at zero.
 // The caller passes module balances and excluded holdings; it must NOT pass the
 // bonded pool, the not-bonded pool or the queue escrow (see NonCirculatingModules).

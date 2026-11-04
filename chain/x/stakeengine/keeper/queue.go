@@ -227,6 +227,15 @@ func (k Keeper) FillQueue(ctx context.Context) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	tokens := map[string]math.Int{} // validator → tokens, updated as fills land
 	active := map[string]bool{}
+	// Per validator: its entity and whether it is frozen (stable within the pass).
+	standingOf := map[string]types.EntityStanding{}
+	// Per entity: the room at the first entry seen for any of its members. No
+	// fill to that entity can precede that first sighting, so it is the room
+	// before this pass; entityFilled is what the pass has filled since. A standing
+	// read later in the pass already includes earlier fills (tokens are live) and
+	// would count them twice.
+	entityRoom := map[string]math.Int{}
+	entityFilled := map[string]math.Int{}
 	var attempts uint64
 	for _, e := range types.SortQueue(entries, k.qualityAt(ctx, st.Epoch)) {
 		if attempts >= params.MaxFillsPerBlock || !headroom.IsPositive() {
@@ -259,6 +268,25 @@ func (k Keeper) FillQueue(ctx context.Context) error {
 		if !room.IsPositive() {
 			continue // waits, keeps its place
 		}
+		standing, seen := standingOf[e.Validator]
+		if !seen {
+			if standing, err = k.EntityStanding(ctx, va); err != nil {
+				return err
+			}
+			standingOf[e.Validator] = standing
+		}
+		if standing.Frozen {
+			continue // waits, keeps its place
+		}
+		if standing.EntityID != "" {
+			if _, ok := entityRoom[standing.EntityID]; !ok {
+				entityRoom[standing.EntityID] = standing.Room()
+			}
+			room = math.MinInt(room, entityRoom[standing.EntityID].Sub(get(entityFilled, standing.EntityID)))
+			if !room.IsPositive() {
+				continue // waits, keeps its place
+			}
+		}
 		fill := math.MinInt(e.Amount, math.MinInt(headroom, room))
 		delegator, err := k.addressCodec.StringToBytes(e.Delegator)
 		if err != nil {
@@ -279,8 +307,18 @@ func (k Keeper) FillQueue(ctx context.Context) error {
 
 		headroom = headroom.Sub(fill)
 		tokens[e.Validator] = tok.Add(fill)
+		if standing.EntityID != "" {
+			entityFilled[standing.EntityID] = get(entityFilled, standing.EntityID).Add(fill)
+		}
 	}
 	return nil
+}
+
+func get(m map[string]math.Int, key string) math.Int {
+	if v, ok := m[key]; ok {
+		return v
+	}
+	return math.ZeroInt()
 }
 
 // fill delegates amount of entry e for its delegator and updates the queue to

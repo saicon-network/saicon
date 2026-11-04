@@ -77,6 +77,13 @@ func (AppModule) RegisterInterfaces(registrar codectypes.InterfaceRegistry) {
 func (am AppModule) RegisterServices(registrar grpc.ServiceRegistrar) error {
 	types.RegisterMsgServer(registrar, keeper.NewMsgServerImpl(am.keeper))
 	types.RegisterQueryServer(registrar, keeper.NewQueryServerImpl(am.keeper))
+	// Store migrations ride on the configurator module.Manager passes as the
+	// registrar (cosmossdk.io/core v0.11 has no separate migrations interface).
+	if cfg, ok := registrar.(module.Configurator); ok {
+		if err := cfg.RegisterMigration(types.ModuleName, 1, keeper.NewMigrator(am.keeper).Migrate1to2); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
@@ -128,11 +135,13 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, _ codec.JSONCodec) json.RawMe
 // ConsensusVersion is a sequence number for state-breaking change of the module.
 // It should be incremented on each consensus-breaking change introduced by the module.
 // To avoid wrong/empty versions, the initial version should be set to 1.
-func (AppModule) ConsensusVersion() uint64 { return 1 }
+func (AppModule) ConsensusVersion() uint64 { return 2 }
 
 // BeginBlock contains the logic that is automatically triggered at the beginning of each block.
-// The begin block implementation is optional.
-func (am AppModule) BeginBlock(_ context.Context) error {
+// It records the equivocations x/evidence accepted in this block (spec §6.1);
+// RecordOffences never returns an error, so the chain cannot halt here.
+func (am AppModule) BeginBlock(ctx context.Context) error {
+	am.keeper.RecordOffences(ctx)
 	return nil
 }
 

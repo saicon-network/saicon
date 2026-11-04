@@ -32,6 +32,13 @@ type StakingKeeper interface {
 	// Methods imported from account should be defined here
 }
 
+// ActivationGate decides whether a validator may enter STATUS_ACTIVE.
+// x/entityregistry implements it (ADR-0014 D1: attestation before activation).
+// A refusal must wrap ErrActivationHeld; any other error is a failure.
+type ActivationGate interface {
+	MayActivate(ctx context.Context, val sdk.ValAddress) error
+}
+
 // AuthKeeper defines the expected interface for the Auth module.
 type AuthKeeper interface {
 	AddressCodec() address.Codec

@@ -17,6 +17,8 @@ import (
 // Set INDEXER_TEST_REST to run it:
 //
 //	INDEXER_TEST_REST=http://localhost:1317 go test ./internal/chain/
+//
+// With INDEXER_TEST_RPC=http://localhost:26657 as well, the pinned readers are exercised too.
 func TestRESTContract(t *testing.T) {
 	base := os.Getenv("INDEXER_TEST_REST")
 	if base == "" {
@@ -45,4 +47,23 @@ func TestRESTContract(t *testing.T) {
 	if ep != nil {
 		require.NotEmpty(t, ep.AccumulatedEP, "an EP record carries a value")
 	}
+
+	// The height-pinned readers, when the node's RPC is given too.
+	rpcBase := os.Getenv("INDEXER_TEST_RPC")
+	if rpcBase == "" {
+		return
+	}
+	rpc := chain.NewRPC(rpcBase)
+	status, err := rpc.Status(ctx)
+	require.NoError(t, err)
+	h := (status.LatestHeight - 10) / 10 * 10
+	require.Greater(t, h, int64(0), "the chain needs a few blocks before the pinned reads can be tried")
+
+	set, err := rpc.ValidatorSetAt(ctx, h)
+	require.NoError(t, err)
+	require.NotEmpty(t, set)
+
+	entities, err := r.EntitiesAt(ctx, h)
+	require.NoError(t, err)
+	require.NotEmpty(t, entities)
 }

@@ -1,0 +1,108 @@
+syntax = "proto3";
+package chain.entityregistry.v1;
+
+import "cosmos_proto/cosmos.proto";
+
+option go_package = "github.com/saicon-network/saicon/chain/x/entityregistry/types";
+
+// EntityStatus is the lifecycle of an attestation.
+enum EntityStatus {
+  ENTITY_STATUS_UNSPECIFIED = 0;
+  // ENTITY_STATUS_ATTESTED: the entity's members may hold active seats.
+  ENTITY_STATUS_ATTESTED = 1;
+  // ENTITY_STATUS_REVOKED: the attestation was withdrawn; the record stays for
+  // the audit trail and has no members.
+  ENTITY_STATUS_REVOKED = 2;
+}
+
+// Entity is one declared beneficial owner (ADR-0014 D1). Nothing personal is
+// stored: the attestation document stays off-chain and only its hash is here.
+message Entity {
+  // id is chosen by the attestor: ^[a-z][a-z0-9-]{2,63}$.
+  string id = 1;
+  // display_name is an organisation name or a pseudonym, 1-64 bytes.
+  string display_name = 2;
+  // attestation_hash is the lowercase hex SHA-256 of the off-chain attestation document.
+  string attestation_hash = 3;
+  // attestor sent the latest MsgAttestEntity (or is the gov authority).
+  string attestor = 4 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  EntityStatus status = 5;
+  int64 attested_height = 6;
+  int64 revoked_height = 7;
+  string revoke_reason = 8;
+}
+
+// Member links a validator to the attested entity that owns it.
+message Member {
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  string entity_id = 2;
+  int64 attested_height = 3;
+  // vrf_public_key is the member's bound ECVRF-EDWARDS25519-SHA512-ELL2 public
+  // key, 64 lowercase hex characters, or empty (W2, D-S8-3).
+  string vrf_public_key = 4;
+  // vrf_key_height is the height at which vrf_public_key was bound; 0 when empty.
+  int64 vrf_key_height = 5;
+  // joined_height is the height this validator joined this entity; kept for a
+  // staying member on re-attestation; 0 for a genesis member.
+  int64 joined_height = 6;
+}
+
+// VrfKeyOffer is a key the validator's operator offered (MsgOfferVrfKey) and an
+// attestor may bind in MsgAttestEntity.
+message VrfKeyOffer {
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  string vrf_public_key = 2;
+  int64 height = 3;
+}
+
+// VrfKeyOwner records the one validator a VRF public key belongs to, for the
+// chain's lifetime.
+message VrfKeyOwner {
+  string vrf_public_key = 1;
+  string validator = 2 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+}
+
+// MemberVrfKey binds an offered key to a member inside an attestation.
+message MemberVrfKey {
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  string vrf_public_key = 2;
+}
+
+// FrozenSeat records a validator that holds registry STATUS_ACTIVE without a
+// live attestation, because its entity was revoked or it was removed from it.
+// It keeps its seat and takes no new stake until it leaves ACTIVE (spec §10).
+message FrozenSeat {
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  string former_entity_id = 2;
+  string reason = 3;
+  int64 height = 4;
+}
+
+// Departure records the last entity a validator left, so the entity it belonged
+// to at an earlier height can be resolved after a removal or a revocation. One
+// row per validator: a later departure replaces the earlier one.
+message Departure {
+  // validator is the operator address of the validator that left.
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  // entity_id is the entity it left.
+  string entity_id = 2;
+  // joined_height is the height it had joined that entity (Member.joined_height).
+  int64 joined_height = 3;
+  // left_height is the height it was removed from the entity or the entity was revoked.
+  int64 left_height = 4;
+  // frozen is true when the validator kept its seat as a frozen seat on leaving.
+  bool frozen = 5;
+  // charged_until is 0 while the frozen seat is still charged; the height its
+  // charge ended otherwise; always 0 when frozen is false.
+  int64 charged_until = 6;
+}
+
+// Ticket is one attested entity's lottery ticket (ADR-0014 D3). The lottery
+// does not exist yet; W2's shadow draw and the selection layer consume this.
+message Ticket {
+  string entity_id = 1;
+  repeated string members = 2 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint32 active_seats = 3;
+  // tickets is always 1 (TicketsPerEntity, a code constant).
+  uint32 tickets = 4;
+}

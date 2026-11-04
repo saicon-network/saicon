@@ -67,3 +67,16 @@ func TestPublicCirculating(t *testing.T) {
 	require.Equal(t, math.NewInt(100),
 		types.PublicCirculating(math.NewInt(100), math.Int{}))
 }
+
+func TestEntityCap(t *testing.T) {
+	p := types.DefaultParams() // fraction 0.05, floor 0
+	ewma := math.LegacyNewDecFromInt(nscnOf(900_000))
+	require.Equal(t, nscnOf(45_000), types.EntityCap(p, ewma))
+
+	p.EntityCapFloor = nscnOf(400_000)
+	require.Equal(t, nscnOf(400_000), types.EntityCap(p, ewma), "the floor binds")
+
+	// Truncation: 0.05 × 19.99 nscn = 0.9995 nscn, which truncates to zero.
+	p.EntityCapFloor = math.ZeroInt()
+	require.True(t, types.EntityCap(p, math.LegacyMustNewDecFromStr("19.99")).IsZero())
+}

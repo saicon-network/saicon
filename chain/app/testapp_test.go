@@ -1,8 +1,11 @@
 package app
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,6 +15,7 @@ import (
 	cmtproto "github.com/cometbft/cometbft/proto/tendermint/types"
 	dbm "github.com/cosmos/cosmos-db"
 	"github.com/cosmos/cosmos-sdk/baseapp"
+	"github.com/cosmos/cosmos-sdk/client/flags"
 	"github.com/cosmos/cosmos-sdk/codec"
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/ed25519"
@@ -26,7 +30,10 @@ import (
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 	"github.com/stretchr/testify/require"
 
+	"github.com/saicon-network/saicon/chain/crypto/vrf"
+	entitytypes "github.com/saicon-network/saicon/chain/x/entityregistry/types"
 	participationtypes "github.com/saicon-network/saicon/chain/x/participation/types"
+	randomnessmoduletypes "github.com/saicon-network/saicon/chain/x/randomness/types"
 	stakeenginetypes "github.com/saicon-network/saicon/chain/x/stakeengine/types"
 	vrtypes "github.com/saicon-network/saicon/chain/x/validatorregistry/types"
 )
@@ -74,6 +81,20 @@ func newConsKey(name string) cryptotypes.PrivKey {
 	return ed25519.GenPrivKeyFromSecret([]byte("s7-test/cons" + name))
 }
 
+// harnessVrfKey is the deterministic VRF key of genesis validator i (A, B, C):
+// its seed is SHA-256 of "s8-vrf/validator" followed by the validator's letter.
+// The harness binds the public key to the validator from genesis; a test signs
+// a submission with the private half. It is a package-level function because a
+// genesis mutate cannot set struct fields on the chain it is building.
+func harnessVrfKey(i int) vrf.PrivateKey {
+	seed := sha256.Sum256([]byte("s8-vrf/validator" + string(rune('A'+i))))
+	k, err := vrf.NewKeyFromSeed(seed[:])
+	if err != nil {
+		panic(err)
+	}
+	return k
+}
+
 // testChain is one fresh chain: three genesis validators (A, B, C), a fourth
 // operator (D) who has funds but no validator yet, five delegators, and the
 // gov module account is funded by fundGov.
@@ -96,6 +117,16 @@ func (c *testChain) govAddr() sdk.AccAddress { return authtypes.NewModuleAddress
 // newTestChain builds the app, runs InitChain, finalizes and commits block 1.
 func newTestChain(t *testing.T, mutate ...func(cdc codec.Codec, gen map[string]json.RawMessage)) *testChain {
 	t.Helper()
+	c := newTestChainAtGenesis(t, mutate...)
+	c.nextBlock(time.Second)
+	return c
+}
+
+// newTestChainAtGenesis builds the app and runs InitChain, and stops there: no
+// block is finalized, so state written by InitGenesis (and by the hooks it fires)
+// can be read as InitChain left it, through c.app.GetContextForFinalizeBlock.
+func newTestChainAtGenesis(t *testing.T, mutate ...func(cdc codec.Codec, gen map[string]json.RawMessage)) *testChain {
+	t.Helper()
 	c := &testChain{t: t, fourth: newAcct("fourth")}
 	for i := range c.vals {
 		c.vals[i] = newAcct("validator" + string(rune('A'+i)))
@@ -105,7 +136,7 @@ func newTestChain(t *testing.T, mutate ...func(cdc codec.Codec, gen map[string]j
 		c.delegators[i] = newAcct("delegator" + string(rune('0'+i)))
 	}
 
-	app := New(log.NewNopLogger(), dbm.NewMemDB(), nil, true, simtestutil.AppOptionsMap{}, baseapp.SetChainID(testChainID))
+	app := New(log.NewNopLogger(), dbm.NewMemDB(), nil, true, simtestutil.AppOptionsMap{flags.FlagHome: t.TempDir()}, baseapp.SetChainID(testChainID))
 	c.app = app
 	cdc := app.AppCodec()
 	gen := app.DefaultGenesis()
@@ -184,6 +215,37 @@ func newTestChain(t *testing.T, mutate ...func(cdc codec.Codec, gen map[string]j
 	}
 	gen[vrtypes.ModuleName] = cdc.MustMarshalJSON(&vrGen)
 
+	// the entity registry: one attested entity per genesis validator, so the
+	// activation gate (ADR-0014 D1) knows each of them. The attestor field is the
+	// gov module account; the params list no attestors (withAttestor adds one).
+	var erGen entitytypes.GenesisState
+	cdc.MustUnmarshalJSON(gen[entitytypes.ModuleName], &erGen)
+	for i, v := range c.vals {
+		name := string(rune('A' + i))
+		id := "entity-" + strings.ToLower(name)
+		pub := hex.EncodeToString(harnessVrfKey(i).PublicKey())
+		erGen.Entities = append(erGen.Entities, entitytypes.Entity{
+			Id:              id,
+			DisplayName:     "Validator " + name,
+			AttestationHash: strings.Repeat("0a", 32),
+			Attestor:        c.govAddr().String(),
+			Status:          entitytypes.EntityStatus_ENTITY_STATUS_ATTESTED,
+			AttestedHeight:  1,
+		})
+		erGen.Members = append(erGen.Members, entitytypes.Member{
+			Validator:      v.val.String(),
+			EntityId:       id,
+			AttestedHeight: 1,
+			// A key bound at genesis (height 0), before any round's cutoff.
+			VrfPublicKey: pub,
+		})
+		erGen.VrfKeyOwners = append(erGen.VrfKeyOwners, entitytypes.VrfKeyOwner{
+			VrfPublicKey: pub,
+			Validator:    v.val.String(),
+		})
+	}
+	gen[entitytypes.ModuleName] = cdc.MustMarshalJSON(&erGen)
+
 	// participation: a snapshot of the latest closed epoch (0) with score 1
 	var pGen participationtypes.GenesisState
 	cdc.MustUnmarshalJSON(gen[participationtypes.ModuleName], &pGen)
@@ -206,6 +268,7 @@ func newTestChain(t *testing.T, mutate ...func(cdc codec.Codec, gen map[string]j
 	var seGen stakeenginetypes.GenesisState
 	cdc.MustUnmarshalJSON(gen[stakeenginetypes.ModuleName], &seGen)
 	seGen.Params.ValidatorCapFloor = scnInt(testCapFloorSCN)
+	seGen.Params.EntityCapFloor = scnInt(testCapFloorSCN) // Validate: the entity floor is at least the validator floor
 	gen[stakeenginetypes.ModuleName] = cdc.MustMarshalJSON(&seGen)
 
 	// gov: a voting period of a few seconds
@@ -231,19 +294,80 @@ func newTestChain(t *testing.T, mutate ...func(cdc codec.Codec, gen map[string]j
 	require.NoError(t, err)
 
 	c.height, c.time = 0, genesisTime
-	c.nextBlock(time.Second)
 	return c
+}
+
+// withAttestor adds a funded attestor account to genesis and lists it in the
+// entity registry's params. Use it as a newTestChain mutate; it changes the
+// supply, so only tests that need an attestor use it.
+func withAttestor(a acct) func(cdc codec.Codec, gen map[string]json.RawMessage) {
+	return func(cdc codec.Codec, gen map[string]json.RawMessage) {
+		var authGen authtypes.GenesisState
+		cdc.MustUnmarshalJSON(gen[authtypes.ModuleName], &authGen)
+		accounts, err := authtypes.UnpackAccounts(authGen.Accounts)
+		if err != nil {
+			panic(err)
+		}
+		var next uint64
+		for _, acc := range accounts {
+			next = max(next, acc.GetAccountNumber()+1)
+		}
+		accounts = append(accounts, authtypes.NewBaseAccount(a.addr, nil, next, 0))
+		packed, err := authtypes.PackAccounts(accounts)
+		if err != nil {
+			panic(err)
+		}
+		authGen.Accounts = packed
+		gen[authtypes.ModuleName] = cdc.MustMarshalJSON(&authGen)
+
+		coins := sdk.NewCoins(scnCoin(1_000))
+		var bankGen banktypes.GenesisState
+		cdc.MustUnmarshalJSON(gen[banktypes.ModuleName], &bankGen)
+		bankGen.Balances = append(bankGen.Balances, banktypes.Balance{Address: a.addr.String(), Coins: coins})
+		bankGen.Supply = bankGen.Supply.Add(coins...)
+		gen[banktypes.ModuleName] = cdc.MustMarshalJSON(&bankGen)
+
+		var erGen entitytypes.GenesisState
+		cdc.MustUnmarshalJSON(gen[entitytypes.ModuleName], &erGen)
+		erGen.Params.Attestors = append(erGen.Params.Attestors, a.addr.String())
+		gen[entitytypes.ModuleName] = cdc.MustMarshalJSON(&erGen)
+	}
+}
+
+// withFastRounds shortens the randomness cadence so a test reaches a round in a
+// few blocks: x/participation's epoch is 5 blocks and a round rotates every 2
+// epochs (on multiples of 10) with a 10-block window.
+func withFastRounds() func(cdc codec.Codec, gen map[string]json.RawMessage) {
+	return func(cdc codec.Codec, gen map[string]json.RawMessage) {
+		var pGen participationtypes.GenesisState
+		cdc.MustUnmarshalJSON(gen[participationtypes.ModuleName], &pGen)
+		pGen.Params.EpochLengthBlocks = 5
+		gen[participationtypes.ModuleName] = cdc.MustMarshalJSON(&pGen)
+
+		var rGen randomnessmoduletypes.GenesisState
+		cdc.MustUnmarshalJSON(gen[randomnessmoduletypes.ModuleName], &rGen)
+		rGen.Params = randomnessmoduletypes.Params{RotationEpochs: 2, WindowBlocks: 10}
+		gen[randomnessmoduletypes.ModuleName] = cdc.MustMarshalJSON(&rGen)
+	}
 }
 
 // nextBlock finalizes and commits one empty block, one step after the last.
 func (c *testChain) nextBlock(step time.Duration, txs ...[]byte) *abci.ResponseFinalizeBlock {
 	c.t.Helper()
+	return c.finalizeBlock(step, nil, txs...)
+}
+
+// finalizeBlock is nextBlock with the block's misbehaviour list: CometBFT hands
+// it to the app as Misbehavior, and x/evidence reads it in BeginBlock.
+func (c *testChain) finalizeBlock(step time.Duration, misbehavior []abci.Misbehavior, txs ...[]byte) *abci.ResponseFinalizeBlock {
+	c.t.Helper()
 	c.height++
 	c.time = c.time.Add(step)
 	res, err := c.app.FinalizeBlock(&abci.RequestFinalizeBlock{
-		Height: c.height,
-		Time:   c.time,
-		Txs:    txs,
+		Height:      c.height,
+		Time:        c.time,
+		Txs:         txs,
+		Misbehavior: misbehavior,
 		// the proposer is validator A
 		ProposerAddress: c.consKeys[0].PubKey().Address(),
 	})

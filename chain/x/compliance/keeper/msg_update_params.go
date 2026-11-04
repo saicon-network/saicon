@@ -24,6 +24,17 @@ func (k msgServer) UpdateParams(ctx context.Context, req *types.MsgUpdateParams)
 		return nil, err
 	}
 
+	// C20: the fraction may not sit below the double-sign fraction in force. A
+	// stateful check, so not in Params.Validate().
+	d, err := k.slashingKeeper.SlashFractionDoubleSign(ctx)
+	if err != nil {
+		return nil, errorsmod.Wrap(err, "reading the double-sign fraction")
+	}
+	if req.Params.CoordinatedAttackFraction.LT(d) {
+		return nil, types.ErrInvalidFraction.Wrapf("%s is below the double-sign fraction in force, %s",
+			req.Params.CoordinatedAttackFraction, d)
+	}
+
 	if err := k.Params.Set(ctx, req.Params); err != nil {
 		return nil, err
 	}

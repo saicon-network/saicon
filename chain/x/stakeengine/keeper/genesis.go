@@ -34,7 +34,14 @@ func (k Keeper) InitGenesis(ctx context.Context, gs types.GenesisState) error {
 		return err
 	}
 	if gs.CapState != nil {
-		if err := k.CapState.Set(ctx, *gs.CapState); err != nil {
+		st := *gs.CapState
+		// A snapshot exported by v0.9.x has no entity cap: derive it from the
+		// stored EWMA, as Migrate1to2 does. The import is the only other place
+		// that backfills; a read never does.
+		if st.EntityCap.IsNil() || st.EntityCap.IsZero() {
+			st.EntityCap = types.EntityCap(gs.Params, st.EwmaBonded)
+		}
+		if err := k.CapState.Set(ctx, st); err != nil {
 			return err
 		}
 	} else if _, err := k.RecomputeCaps(ctx, 0, true); err != nil {

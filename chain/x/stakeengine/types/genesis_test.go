@@ -33,6 +33,7 @@ func TestGenesisValidation(t *testing.T) {
 		"wrong delegator prefix": {Params: types.DefaultParams(), Queue: []types.QueueEntry{{Id: 0, Delegator: valoper(1), Validator: valoper(1), Amount: math.NewInt(scn)}}, NextQueueId: 1},
 		"wrong validator prefix": {Params: types.DefaultParams(), Queue: []types.QueueEntry{{Id: 0, Delegator: saiconAddr(1), Validator: saiconAddr(1), Amount: math.NewInt(scn)}}, NextQueueId: 1},
 		"negative cap state":     {Params: types.DefaultParams(), CapState: &types.CapState{GlobalCap: math.NewInt(-1), PublicCirculating: math.ZeroInt(), ValidatorCap: math.ZeroInt(), EwmaBonded: math.LegacyZeroDec()}},
+		"negative entity cap":    {Params: types.DefaultParams(), CapState: &types.CapState{GlobalCap: math.ZeroInt(), PublicCirculating: math.ZeroInt(), ValidatorCap: math.ZeroInt(), EntityCap: math.NewInt(-1), EwmaBonded: math.LegacyZeroDec()}},
 		"bad params":             {Params: types.Params{}},
 		"amount below min entry": {Params: types.DefaultParams(), Queue: []types.QueueEntry{{Id: 0, Delegator: saiconAddr(1), Validator: valoper(1), Amount: math.NewInt(scn - 1)}}, NextQueueId: 1},
 		"negative height":        {Params: types.DefaultParams(), Queue: []types.QueueEntry{{Id: 0, Delegator: saiconAddr(1), Validator: valoper(1), Amount: math.NewInt(scn), EnqueuedHeight: -1}}, NextQueueId: 1},

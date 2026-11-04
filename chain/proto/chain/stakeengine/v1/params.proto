@@ -80,4 +80,21 @@ message Params {
     (gogoproto.customtype) = "cosmossdk.io/math.Int",
     (gogoproto.nullable) = false
   ];
+
+  // entity_cap_fraction is the share of the EWMA of total bonded that all of one
+  // attested entity's validators may hold together (ADR-0012 D4: 5%). Same base
+  // as the per-validator cap (ADR-0012 Stage 11, same-denominator rule).
+  string entity_cap_fraction = 12 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+
+  // entity_cap_floor is a lower bound on the entity cap, in nscn, never below
+  // validator_cap_floor. Default 0; the devnet sets it to the validator floor.
+  string entity_cap_floor = 13 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
 }

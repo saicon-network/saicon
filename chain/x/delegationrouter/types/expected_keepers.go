@@ -8,6 +8,7 @@ import (
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 
 	participationtypes "github.com/saicon-network/saicon/chain/x/participation/types"
+	stakeenginetypes "github.com/saicon-network/saicon/chain/x/stakeengine/types"
 	validatorregistrytypes "github.com/saicon-network/saicon/chain/x/validatorregistry/types"
 )
 
@@ -23,6 +24,7 @@ type StakeEngineKeeper interface {
 	MaxValidatorsPerDelegator(ctx context.Context) (uint32, error)
 	MinDelegation(ctx context.Context) (math.Int, error)
 	LatestEpoch(ctx context.Context) (uint64, error)
+	EntityStanding(ctx context.Context, v sdk.ValAddress) (stakeenginetypes.EntityStanding, error)
 	EnqueueRouted(ctx context.Context, delegator sdk.AccAddress, validator sdk.ValAddress, amount math.Int) (uint64, error)
 }
 

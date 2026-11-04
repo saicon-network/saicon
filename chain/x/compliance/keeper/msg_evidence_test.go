@@ -196,3 +196,25 @@ func TestSubmitEvidence_RejectsRestoredEvent(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, types.ErrInvalidEvent)
 }
+
+// Only MsgFireCoordinatedSanction writes compliance event 6 (spec §8.5).
+func TestSubmitEvidenceRefusesTheCoordinatedEvent(t *testing.T) {
+	f := initFixture(t)
+	ms := keeper.NewMsgServerImpl(f.keeper)
+
+	addr := sdk.ValAddress([]byte("ev-coordinated-20byt"))[:20]
+	f.vr.statuses[addr.String()] = vrtypes.Status_STATUS_ACTIVE
+
+	_, err := ms.SubmitEvidence(f.ctx, &types.MsgSubmitEvidence{
+		Authority:        authorityStr(t, f),
+		ValidatorAddress: addr.String(),
+		Event:            types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_COORDINATED_ATTACK,
+		Reason:           "forged sanction",
+	})
+	require.ErrorIs(t, err, types.ErrInvalidEvent)
+
+	_, found, err := f.keeper.GetCompliance(f.ctx, addr)
+	require.NoError(t, err)
+	require.False(t, found, "a refused event writes nothing")
+	require.Equal(t, vrtypes.Status_STATUS_ACTIVE, f.vr.statuses[addr.String()])
+}

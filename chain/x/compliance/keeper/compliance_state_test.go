@@ -8,11 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/saicon-network/saicon/chain/x/compliance/types"
+	vrtypes "github.com/saicon-network/saicon/chain/x/validatorregistry/types"
 )
 
 func TestSetCompliance_PersistsAndMirrors(t *testing.T) {
 	f := initFixture(t)
 	addr := sdk.ValAddress([]byte("compliance-val-20by!"))[:20]
+	f.vr.statuses[addr.String()] = vrtypes.Status_STATUS_BONDING // registered, not consensus-active
 
 	err := f.keeper.SetCompliance(f.ctx, addr, false, types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_EXTERNAL_FLAG, "admin flag")
 	require.NoError(t, err)
@@ -33,6 +35,7 @@ func TestSetCompliance_PersistsAndMirrors(t *testing.T) {
 func TestSetCompliance_RestoreFlipsFlag(t *testing.T) {
 	f := initFixture(t)
 	addr := sdk.ValAddress([]byte("compliance-restore!!"))[:20]
+	f.vr.statuses[addr.String()] = vrtypes.Status_STATUS_BONDING // registered, not consensus-active
 
 	require.NoError(t, f.keeper.SetCompliance(f.ctx, addr, false, types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_KYC_EXPIRED, "kyc expired"))
 	require.False(t, f.vr.flags[addr.String()])
@@ -54,6 +57,16 @@ func TestSetCompliance_MirrorErrorPropagates(t *testing.T) {
 	require.Error(t, err)
 }
 
+// The registry refuses to mirror the flag of a validator it has no record of,
+// and the error reaches the caller.
+func TestSetCompliance_UnregisteredValidatorFails(t *testing.T) {
+	f := initFixture(t)
+	addr := sdk.ValAddress([]byte("compliance-unreg-20b"))[:20]
+
+	err := f.keeper.SetCompliance(f.ctx, addr, false, types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_EXTERNAL_FLAG, "x")
+	require.ErrorIs(t, err, vrtypes.ErrValidatorNotFound)
+}
+
 func TestGetCompliance_NotFound(t *testing.T) {
 	f := initFixture(t)
 	addr := sdk.ValAddress([]byte("compliance-absent20b"))[:20]
@@ -69,6 +82,7 @@ func TestGetCompliance_NotFound(t *testing.T) {
 func TestSetCompliance_EmitsFlaggedEvent(t *testing.T) {
 	f := initFixture(t)
 	addr := sdk.ValAddress([]byte("compliance-flag-20by"))[:20]
+	f.vr.statuses[addr.String()] = vrtypes.Status_STATUS_BONDING // registered, not consensus-active
 
 	sdkCtx := sdk.UnwrapSDKContext(f.ctx)
 	require.NoError(t, f.keeper.SetCompliance(sdkCtx, addr, false, types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_EXTERNAL_FLAG, "demo flag"))
@@ -97,6 +111,7 @@ func TestSetCompliance_EmitsFlaggedEvent(t *testing.T) {
 func TestSetCompliance_EmitsClearedEvent(t *testing.T) {
 	f := initFixture(t)
 	addr := sdk.ValAddress([]byte("compliance-clear-20b"))[:20]
+	f.vr.statuses[addr.String()] = vrtypes.Status_STATUS_BONDING // registered, not consensus-active
 
 	sdkCtx := sdk.UnwrapSDKContext(f.ctx)
 	require.NoError(t, f.keeper.SetCompliance(sdkCtx, addr, true, types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_RESTORED, "restored ok"))
@@ -117,4 +132,17 @@ func TestSetCompliance_EmitsClearedEvent(t *testing.T) {
 	require.Equal(t, addr.String(), attrs[types.AttributeKeyValidator])
 	require.Equal(t, "COMPLIANCE_EVENT_TYPE_RESTORED", attrs[types.AttributeKeyEvent])
 	require.Equal(t, "restored ok", attrs[types.AttributeKeyReason])
+}
+
+// The coordinated-attack event jails an active validator, as a critical
+// violation does (spec §8.5): it is not a quarantine.
+func TestSetCompliance_CoordinatedAttackJails(t *testing.T) {
+	f := initFixture(t)
+	addr := sdk.ValAddress([]byte("compliance-coord-20b"))[:20]
+	f.vr.statuses[addr.String()] = vrtypes.Status_STATUS_ACTIVE
+
+	require.NoError(t, f.keeper.SetCompliance(f.ctx, addr, false,
+		types.ComplianceEventType_COMPLIANCE_EVENT_TYPE_COORDINATED_ATTACK, "attack"))
+	require.Equal(t, vrtypes.Status_STATUS_JAILED, f.vr.statuses[addr.String()])
+	require.False(t, f.vr.flags[addr.String()])
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	routertypes "github.com/saicon-network/saicon/chain/x/delegationrouter/types"
+	entitytypes "github.com/saicon-network/saicon/chain/x/entityregistry/types"
 	stakeenginetypes "github.com/saicon-network/saicon/chain/x/stakeengine/types"
 )
 
@@ -267,6 +268,16 @@ func TestRouterRefusesAFourthValidator(t *testing.T) {
 	require.NoError(t, err)
 	res := c.deliverTx(c.fourth, create)
 	require.Equal(t, uint32(0), res.Code, res.Log)
+	// The bond hook found D in no entity and the activation gate held it at
+	// BONDING (ADR-0014 D1); the gov authority attests it, and the entity
+	// registry promotes it at the end of the next block.
+	_, err = c.app.EntityregistryKeeper.Attest(c.ctx(), c.govAddr(), entitytypes.Attestation{
+		EntityID:        "entity-d",
+		DisplayName:     "Validator D",
+		AttestationHash: strings.Repeat("0a", 32),
+		Validators:      []sdk.ValAddress{c.fourth.val},
+	})
+	require.NoError(t, err)
 	c.nextBlock(time.Second)
 
 	preview := c.queryRoute(d, c.fourth.val, 1_000)
