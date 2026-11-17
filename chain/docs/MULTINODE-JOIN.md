@@ -64,7 +64,7 @@ but **not `curl`** — query the node with `saicond` itself.
 
 ```bash
 # a release image from ghcr.io — pick the release the network runs (see the note at the top)
-TAG=v0.10.0
+TAG=v0.10.1
 IMG=ghcr.io/saicon-network/saicon:$TAG
 H=/home/saicon/.saicon
 CHAIN_ID=saicon-devnet-1
@@ -336,7 +336,7 @@ participation, not fault tolerance, until their stake is comparable.
 ```bash
 docker compose -f chain/docker-compose.yml build                        # builds saicond:dev
 bash chain/scripts/rehearse-join.sh                                     # ~2 minutes
-IMAGE=ghcr.io/saicon-network/saicon:v0.10.0 bash chain/scripts/rehearse-join.sh
+IMAGE=ghcr.io/saicon-network/saicon:v0.10.1 bash chain/scripts/rehearse-join.sh
 ```
 
 It starts node A as the DevNet's genesis node, then has B and C each join from an empty node:

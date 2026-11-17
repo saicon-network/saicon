@@ -66,8 +66,11 @@ type dep struct {
 var goos, goarch string
 
 // sourceURL and sourceRef tell a recipient where the complete corresponding source
-// is, which the LGPL and the MPL ask the distributor to say.
+// is, which the LGPL and the MPL ask the distributor to say. productName and
+// rebuildCmd name the program that source builds and how, so the same tool can
+// describe another binary shipped next to saicond (the image's cosmovisor).
 var sourceURL, sourceRef string
+var productName, rebuildCmd = "SAiCoN", "go build ./cmd/saicond"
 
 func targetEnv() []string {
 	env := append(os.Environ(), "CGO_ENABLED=0")
@@ -89,6 +92,8 @@ func main() {
 	flag.StringVar(&goarch, "goarch", "", "target GOARCH (default: the host's)")
 	flag.StringVar(&sourceURL, "source", "https://github.com/saicon-network/saicon", "where the complete SAiCoN source is published")
 	flag.StringVar(&sourceRef, "ref", "", "the release tag or commit the binary is built from")
+	flag.StringVar(&productName, "name", productName, "the program whose source -source names")
+	flag.StringVar(&rebuildCmd, "rebuild", rebuildCmd, "how that source builds the binary")
 	flag.Parse()
 	if *out == "" {
 		fail(errors.New("-out is required"))
@@ -432,12 +437,12 @@ func writeIndex(out, target, goVersion string, keys []string, deps map[string]*d
 	fmt.Fprintf(&b, "Modules under MPL-2.0 or the LGPL are linked unmodified. The source of every package of\n")
 	fmt.Fprintf(&b, "theirs that the binary links is in `source/<module>@<version>/`. The complete source of\n")
 	if sourceRef != "" {
-		fmt.Fprintf(&b, "SAiCoN is at %s, tag `%s`,\n", sourceURL, sourceRef)
+		fmt.Fprintf(&b, "%s is at %s, tag `%s`,\n", productName, sourceURL, sourceRef)
 	} else {
-		fmt.Fprintf(&b, "SAiCoN is at %s,\n", sourceURL)
+		fmt.Fprintf(&b, "%s is at %s,\n", productName, sourceURL)
 	}
 	fmt.Fprintf(&b, "so the binary can be rebuilt against a modified copy of any of them\n")
-	fmt.Fprintf(&b, "(`go mod edit -replace`, then `go build ./cmd/saicond`).\n\n")
+	fmt.Fprintf(&b, "(`go mod edit -replace`, then `%s`).\n\n", rebuildCmd)
 	fmt.Fprintf(&b, "| Module | Version | License | Files |\n|---|---|---|---|\n")
 	counts := map[string]int{}
 	for _, k := range keys {

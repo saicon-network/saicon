@@ -38,20 +38,37 @@ RUN go build \
 # whose terms are missing or not recognised.
 RUN go run ./scripts/third-party-licenses -out /out/licenses -goos linux -goarch "$(go env GOARCH)" -ref "${VERSION}"
 
+# Cosmovisor runs saicond and, at the height of a governance upgrade, switches it to the
+# release the upgrade plan names (docker/entrypoint-singlenode.sh). Built here, pure Go
+# like saicond, in a throw-away module that requires it at the pinned version; its
+# licenses are described by the same tool, pointed at its own source.
+ARG COSMOVISOR_VERSION=v1.7.3
+RUN go build -o /tmp/third-party-licenses ./scripts/third-party-licenses \
+    && mkdir /tmp/cosmovisor && cd /tmp/cosmovisor \
+    && go mod init saicon.local/cosmovisor-build \
+    && go get "cosmossdk.io/tools/cosmovisor@${COSMOVISOR_VERSION}" \
+    && go build -o /out/cosmovisor cosmossdk.io/tools/cosmovisor/cmd/cosmovisor \
+    && /tmp/third-party-licenses -out /out/licenses-cosmovisor \
+         -pkg cosmossdk.io/tools/cosmovisor/cmd/cosmovisor -goos linux -goarch "$(go env GOARCH)" \
+         -name Cosmovisor -source https://github.com/cosmos/cosmos-sdk \
+         -ref "tools/cosmovisor/${COSMOVISOR_VERSION}" -rebuild "go build ./tools/cosmovisor/cmd/cosmovisor"
+
 ############################
 # Runtime stage
 ############################
 FROM alpine:3.20
 
-# apk upgrade first: the base image's own packages can lag the release branch, and
-# bringing every package to the branch head is what lets docker/alpine-sources.sh
-# match each installed version to its recipe (and carries the branch's fixes).
+# apk upgrade first: the base image's own packages can lag the release branch, and the
+# upgrade carries the branch's fixes. docker/alpine-sources.sh finds the recipe of each
+# installed version in the branch history either way.
 RUN apk upgrade --no-cache \
     && apk add --no-cache ca-certificates bash jq \
     && adduser -D -u 1000 saicon
 
 COPY --from=builder /out/saicond /usr/bin/saicond
 COPY --from=builder /out/licenses /usr/share/licenses/saicon
+COPY --from=builder /out/cosmovisor /usr/bin/cosmovisor
+COPY --from=builder /out/licenses-cosmovisor /usr/share/licenses/cosmovisor
 COPY docker/IMAGE-LICENSES.txt /usr/share/licenses/saicon/README.txt
 RUN apk list --installed > /usr/share/licenses/saicon/alpine-packages.txt
 COPY docker/entrypoint-singlenode.sh /usr/local/bin/entrypoint-singlenode.sh

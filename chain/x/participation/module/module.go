@@ -171,9 +171,10 @@ func (am AppModule) BeginBlock(ctx context.Context) error {
 //
 // Error handling (v0.1): a compute error is LOGGED and SWALLOWED (return nil)
 // rather than returned, because returning an error from EndBlock halts the
-// chain. The hard fail-loud invariant (V-2) is not wired yet, so a transient
-// participation glitch must not be able to stop block production. This will be
-// revisited when V-2 lands.
+// chain, and a transient participation accounting glitch must not be able to
+// stop block production. This deliberately stays soft: the hard fail-loud
+// invariant (V-2: EP=0 -> reward=0) is enforced downstream in x/rewards'
+// EndBlock, where RewardGateInvariant panics on any breach (WI-016).
 func (am AppModule) EndBlock(ctx context.Context) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	h := sdkCtx.BlockHeight()

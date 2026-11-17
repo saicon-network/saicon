@@ -340,6 +340,140 @@ sed -i 's#^snapshot-interval = .*#snapshot-interval = 1000#' "${APP_TOML}"
 sed -i 's#^snapshot-keep-recent = .*#snapshot-keep-recent = 2#' "${APP_TOML}"
 echo "[entrypoint] retention profile: ${NODE_PROFILE}"
 
+# ── Cosmovisor ────────────────────────────────────────────────────────────
+# The node runs under Cosmovisor, which takes a governance upgrade by itself: at the
+# upgrade height saicond halts and writes data/upgrade-info.json; Cosmovisor backs up
+# the data directory, downloads the binary the plan's info names for this platform
+# (its sha256 checksum is required), switches cosmovisor/current to it and restarts
+# the node. A binary placed in cosmovisor/upgrades/<name>/bin/ beforehand is used
+# without a download. COSMOVISOR=0 runs saicond directly, as before.
+#
+# The binaries live in the node home, not in the image: once Cosmovisor has switched
+# to an upgrade, the image's /usr/bin/saicond is older than the binary that runs, and
+# pulling a newer image does not change which binary runs. The image's binary only
+# seeds the layout, once, when the home has none:
+#   - a home that never took an upgrade gets it as cosmovisor/genesis;
+#   - a home that already took one (data/upgrade-info.json names it) gets it as that
+#     upgrade's binary, with current pointing at it. Seeding it as genesis would make
+#     Cosmovisor read the old upgrade-info.json as an upgrade still to take and halt
+#     the node. So the image a node is first started with under Cosmovisor must carry
+#     the version the chain runs now.
+export DAEMON_NAME="${DAEMON_NAME:-saicond}"
+export DAEMON_HOME="${SAICON_HOME}"   # Cosmovisor watches and backs up the node home itself
+export DAEMON_ALLOW_DOWNLOAD_BINARIES="${DAEMON_ALLOW_DOWNLOAD_BINARIES:-true}"
+export DAEMON_DOWNLOAD_MUST_HAVE_CHECKSUM="${DAEMON_DOWNLOAD_MUST_HAVE_CHECKSUM:-true}"
+export DAEMON_RESTART_AFTER_UPGRADE="${DAEMON_RESTART_AFTER_UPGRADE:-true}"
+export UNSAFE_SKIP_BACKUP="${UNSAFE_SKIP_BACKUP:-false}"
+export COSMOVISOR_COLOR_LOGS="${COSMOVISOR_COLOR_LOGS:-false}"
+CV_ROOT="${DAEMON_HOME}/cosmovisor"
+UPGRADE_INFO="${SAICON_HOME}/data/upgrade-info.json"
+RETRY="${UPGRADE_RETRY_SECONDS:-60}"
+
+upgrade_name() { # file -> the upgrade name it records, checked
+  local name
+  name=$(jq -r '.name // empty' "$1")
+  if ! [[ "${name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "[entrypoint] ERROR: $1 names no usable upgrade ('${name}')" >&2
+    exit 1
+  fi
+  echo "${name}"
+}
+
+# Built in a side directory and renamed into place, so a seeding cut short (a full disk)
+# is redone on the next start instead of leaving a layout without a binary.
+seed_cosmovisor() {
+  local tmp="${CV_ROOT}.seeding" name
+  [ -e "${CV_ROOT}" ] && return 0
+  rm -rf "${tmp}"
+  if [ -s "${UPGRADE_INFO}" ]; then
+    name=$(upgrade_name "${UPGRADE_INFO}")
+    mkdir -p "${tmp}/upgrades/${name}/bin"
+    cp /usr/bin/saicond "${tmp}/upgrades/${name}/bin/saicond"
+    cp "${UPGRADE_INFO}" "${tmp}/upgrades/${name}/upgrade-info.json"
+    ln -s "upgrades/${name}" "${tmp}/current"
+    echo "[entrypoint] cosmovisor: this home already took upgrade ${name}; the image's saicond ($(saicond version 2>&1)) is seeded as its binary"
+  else
+    mkdir -p "${tmp}/genesis/bin"
+    cp /usr/bin/saicond "${tmp}/genesis/bin/saicond"
+    echo "[entrypoint] cosmovisor: the image's saicond ($(saicond version 2>&1)) is seeded as the genesis binary"
+  fi
+  mv "${tmp}" "${CV_ROOT}"
+}
+
+# An upgrade the node halted for that Cosmovisor did not finish: the download failed, the
+# disk filled during the backup, the container stopped half-way. Cosmovisor does not pick
+# it up again: it detects an upgrade through the running node's RPC, and the old binary
+# now exits during its startup replay ("UPGRADE ... NEEDED") before the RPC is up, so the
+# container would restart for ever. It may also have left a partial or unchecked file as
+# the upgrade's binary, which it would later trust. So the entrypoint finishes the switch:
+# it keeps a binary that matches the plan's checksum, downloads it otherwise (retrying
+# every UPGRADE_RETRY_SECONDS, default 60, without exiting), makes the backup Cosmovisor
+# would have made, points current at it, and starts Cosmovisor on the new binary.
+backup_taken() { # name height
+  local f
+  for f in "${DAEMON_HOME}"/data-backup-*/upgrade-info.json; do
+    [ -s "${f}" ] || continue
+    [ "$(jq -r '"\(.name) \(.height)"' "${f}" 2>/dev/null)" = "$1 $2" ] && return 0
+  done
+  return 1
+}
+
+finish_pending_upgrade() {
+  local name cur="" dir bin url="" plain want="" got arch tmp
+  [ -s "${UPGRADE_INFO}" ] || return 0
+  name=$(upgrade_name "${UPGRADE_INFO}")
+  [ -f "${CV_ROOT}/current/upgrade-info.json" ] && cur=$(jq -r '.name // empty' "${CV_ROOT}/current/upgrade-info.json")
+  [ "${name,,}" = "${cur,,}" ] && return 0
+  echo "[entrypoint] upgrade ${name} (height $(jq -r .height "${UPGRADE_INFO}")) is not finished; finishing it"
+  dir="${CV_ROOT}/upgrades/${name}"; bin="${dir}/bin/saicond"
+  case "$(uname -m)" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) arch="$(uname -m)" ;; esac
+  url=$(jq -r '.info // empty' "${UPGRADE_INFO}" | jq -r --arg k "linux/${arch}" '(.binaries[$k] // .binaries.any) // empty' 2>/dev/null || true)
+  [[ "${url}" =~ [?\&]checksum=sha256:([0-9a-fA-F]{64}) ]] && want="${BASH_REMATCH[1],,}"
+  if [ -e "${bin}" ]; then
+    got=$(sha256sum "${bin}" | cut -d' ' -f1)
+    if [ ! -s "${bin}" ] || { [ -n "${want}" ] && [ "${got}" != "${want}" ]; }; then
+      echo "[entrypoint] ${bin} (sha256 ${got}) is not the plan's binary (sha256 ${want:-none}); removing it" >&2
+      rm -f "${bin}"
+    fi
+  fi
+  while [ ! -s "${bin}" ]; do
+    if [ -z "${want}" ]; then
+      echo "[entrypoint] the plan names no linux/${arch} binary with a sha256 checksum: place ${name}'s binary at ${bin}; checking again in ${RETRY}s" >&2
+      sleep "${RETRY}"; continue
+    fi
+    plain=$(sed -E 's/([?&])checksum=sha256:[0-9a-fA-F]{64}&?/\1/; s/[?&]$//' <<<"${url}")
+    tmp="${bin}.download"; mkdir -p "${dir}/bin"
+    if wget -q -O "${tmp}" "${plain}" && [ "$(sha256sum "${tmp}" | cut -d' ' -f1)" = "${want}" ]; then
+      chmod 755 "${tmp}" && mv "${tmp}" "${bin}"
+      echo "[entrypoint] downloaded ${name}'s binary from ${plain} (sha256 ${want})"
+    else
+      rm -f "${tmp}"
+      echo "[entrypoint] could not download ${name}'s binary from ${plain} with sha256 ${want}; retrying in ${RETRY}s" >&2
+      sleep "${RETRY}"
+    fi
+  done
+  # Cosmovisor backs up data/ after the halt and before it downloads, so its backup holds
+  # this upgrade's upgrade-info.json; one is enough.
+  if [ "${UNSAFE_SKIP_BACKUP}" != true ] && ! backup_taken "${name}" "$(jq -r .height "${UPGRADE_INFO}")"; then
+    until rm -rf "${DAEMON_HOME}/data-backup-${name}.tmp" && cp -a "${SAICON_HOME}/data" "${DAEMON_HOME}/data-backup-${name}.tmp" \
+        && mv "${DAEMON_HOME}/data-backup-${name}.tmp" "${DAEMON_HOME}/data-backup-${name}"; do
+      rm -rf "${DAEMON_HOME}/data-backup-${name}.tmp"
+      echo "[entrypoint] could not back up data/ before upgrade ${name} (disk space?); retrying in ${RETRY}s" >&2
+      sleep "${RETRY}"
+    done
+    echo "[entrypoint] data/ backed up to data-backup-${name}"
+  fi
+  cp "${UPGRADE_INFO}" "${dir}/upgrade-info.json"
+  ln -sfn "upgrades/${name}" "${CV_ROOT}/current"
+  echo "[entrypoint] cosmovisor: current -> upgrades/${name}"
+}
+
 # min-gas-prices is empty in app/config.go, so the node halts without this flag.
-echo "[entrypoint] starting node (minimum-gas-prices=0nscn)"
-exec saicond --home "${SAICON_HOME}" start --minimum-gas-prices 0nscn
+if [ "${COSMOVISOR:-1}" = 0 ]; then
+  echo "[entrypoint] starting node without cosmovisor (minimum-gas-prices=0nscn)"
+  exec saicond --home "${SAICON_HOME}" start --minimum-gas-prices 0nscn
+fi
+seed_cosmovisor
+finish_pending_upgrade
+echo "[entrypoint] starting node under cosmovisor: $(readlink "${CV_ROOT}/current" 2>/dev/null || echo genesis) (minimum-gas-prices=0nscn)"
+exec cosmovisor run --home "${SAICON_HOME}" start --minimum-gas-prices 0nscn

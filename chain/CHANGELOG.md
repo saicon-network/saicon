@@ -3,7 +3,37 @@
 All notable changes to the SAiCoN chain. Versions are git tags; the binary
 reports its version via `git describe`.
 
-## Unreleased
+## v0.10.1 — 2026-11-17
+
+Not state-breaking: the chain code is v0.10.0's, and a v0.10.0 network runs this release with
+no upgrade. The release adds how a node takes the next one.
+
+### Added
+
+- **Upgrades are taken by Cosmovisor.** The node image runs `saicond` under Cosmovisor v1.7.3
+  (`docker/entrypoint-singlenode.sh`), so a node takes a governance upgrade at its height with
+  no hand on it. `saicond` halts at the height. Cosmovisor backs up `data/`, downloads the
+  binary that the plan info's `binaries` names for the node's platform (a sha256 checksum is
+  required), switches to it and restarts. The binaries live in the node home under
+  `cosmovisor/`. On first start the entrypoint seeds that layout from the image's binary: as
+  `genesis` in a fresh home, or as the binary of the upgrade a home already took without
+  Cosmovisor. `COSMOVISOR=0` runs `saicond` directly. `./scripts/upgrade-proposal.sh` writes an
+  upgrade proposal that points at a release's bare linux binaries, each checked against the
+  release's `SHA256SUMS`. `./scripts/rehearse-cosmovisor.sh` rehearses v0.9.1 → v0.10.0 this way
+  in Docker, together with the move of an already-upgraded home.
+- `./scripts/vrf-submit-loop.sh` runs the node home's `cosmovisor/current` binary when there is
+  one, so the submitter follows an upgrade.
+- `./scripts/third-party-licenses` takes `-name` and `-rebuild`, so it also describes the image's
+  `cosmovisor` (its licenses are in `/usr/share/licenses/cosmovisor`).
+
+### Fixed
+
+- **The image's Alpine sources match the packages it ships.** `docker/alpine-sources.sh` took
+  every recipe from the head of aports `3.20-stable` and failed the release when a package in the
+  image was older (a cached `apk upgrade` layer is enough). It now takes each recipe from the
+  aports commit that builds the installed version, searching the branch history when the head has
+  moved on, and names that commit per package in the archive's README. It also falls back to
+  `git.alpinelinux.org` when `gitlab.alpinelinux.org` refuses the CI network.
 
 ## v0.10.0 — 2026-10-29
 

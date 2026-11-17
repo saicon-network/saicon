@@ -6,6 +6,12 @@ saicond
   the Go modules and the Go standard library linked into saicond are in
   THIRD_PARTY_LICENSES.md, licenses/ and source/ next to this file.
 
+cosmovisor
+  Cosmovisor, the Cosmos SDK's upgrade manager, is built unmodified from
+  cosmossdk.io/tools/cosmovisor (Apache License 2.0, github.com/cosmos/cosmos-sdk).
+  Its own license and those of the Go modules linked into it are in
+  /usr/share/licenses/cosmovisor (THIRD_PARTY_LICENSES.md, licenses/, source/).
+
 Operating system
   The image is based on Alpine Linux (alpine:3.20) and adds the Alpine packages
   ca-certificates, bash and jq. alpine-packages.txt lists every installed package

@@ -20,7 +20,7 @@ analytics → off-chain backend; programmable app logic → CosmWasm (Q1).
 
 ---
 
-## 1. Current state (as-built, v0.10.0 — 2026-10-29)
+## 1. Current state (as-built, v0.10.1 — 2026-11-17)
 
 ### 1.1 Modules
 
