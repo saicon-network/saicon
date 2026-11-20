@@ -34,6 +34,13 @@ echo "copyleft origins: $(echo $origins)"
 # that answers is used and named in the README. Either refusing (gitlab.alpinelinux.org
 # answers some CI networks with HTTP 418) is not a reason to ship without sources.
 URLS="${APORTS_URLS:-https://gitlab.alpinelinux.org/alpine/aports.git https://git.alpinelinux.org/aports}"
+# Upstream archives are fetched from Alpine's distfiles mirror first and from the
+# project's own host only when the mirror lacks them: some upstreams live on
+# gitlab.alpinelinux.org too (apk-tools does), which a refusing CI network cannot
+# reach either. abuild checks every file against the recipe's sha512sums wherever it
+# came from. DISTFILES_MIRROR= (empty) fetches from upstream only.
+DISTFILES_MIRROR="${DISTFILES_MIRROR-https://distfiles.alpinelinux.org/distfiles/v${BRANCH%-stable}}"
+export DISTFILES_MIRROR
 work=$(mktemp -d)
 src=""
 for url in $URLS; do
@@ -105,7 +112,8 @@ cat > "$OUT/README.txt" <<TXT
 Complete corresponding source of the copyleft-licensed Alpine Linux packages in the
 SAiCoN node image. aports/<origin>/ holds each package's build recipe (APKBUILD) and
 patches from $src (branch $BRANCH), each at the commit that builds the installed
-version; distfiles/ holds the upstream sources the recipes fetch.
+version; distfiles/ holds the upstream sources the recipes fetch${DISTFILES_MIRROR:+ (through $DISTFILES_MIRROR)}, each checked
+against the sha512 in its recipe.
 
 Recipes:$commits
 
