@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAiCoN devnet faucet</title>
+<style>
+:root{--bg:#081020;--card:#0E1B30;--line:#1D3050;--ink:#EFF5FB;--muted:#8FA3BC;--green:#3DDC97;--red:#FF8A8A}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:32px 16px}
+h1{font-size:1.5rem;margin:0 0 4px}
+p{color:var(--muted);margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px}
+label{display:block;font-size:.9rem;color:var(--muted);margin-bottom:6px}
+input{width:100%;padding:12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit;font-family:ui-monospace,Menlo,monospace;font-size:.9rem}
+input:focus{outline:2px solid var(--green);outline-offset:1px}
+button{margin-top:14px;width:100%;padding:12px;border:0;border-radius:8px;background:var(--green);color:#04210f;font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+#result{margin-top:16px;word-break:break-all;min-height:1.5em}
+.ok{color:var(--green)}.err{color:var(--red)}
+a{color:var(--green)}
+dl{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:20px 0 0;font-size:.85rem;color:var(--muted)}
+dd{margin:0;color:var(--ink);word-break:break-all}
+small{display:block;margin-top:16px;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+<h1>SAiCoN devnet faucet</h1>
+<p>Free test tokens for fees and for trying transfers and delegation. They have no value. Validator stake is not handed out here.</p>
+<div class="card">
+<form id="f">
+<label for="addr">Your address (starts with saicon1)</label>
+<input id="addr" name="address" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="saicon1..." required>
+<button id="go" type="submit">Request tokens</button>
+</form>
+<div id="result" role="status" aria-live="polite"></div>
+<dl id="info"></dl>
+</div>
+<small>Limit: one request per address and one per network every 24 hours. <a href="https://github.com/saicon-network/saicon/issues/new/choose" target="_blank" rel="noopener">Need help?</a></small>
+</main>
+<script>
+(function(){
+var res=document.getElementById('result'),btn=document.getElementById('go'),info=document.getElementById('info');
+var st=null;
+function scn(base,exp){
+  var s=String(base);while(s.length<=exp)s='0'+s;
+  var i=s.slice(0,s.length-exp),f=s.slice(s.length-exp).replace(/0+$/,'');
+  return i.replace(/\B(?=(\d{3})+(?!\d))/g,',')+(f?'.'+f:'');
+}
+function line(k,v){var a=document.createElement('dt'),b=document.createElement('dd');a.textContent=k;b.textContent=v;info.appendChild(a);info.appendChild(b);}
+function show(cls,text,link){
+  res.className=cls;res.textContent=text;
+  if(link){res.appendChild(document.createElement('br'));var a=document.createElement('a');a.href=link;a.textContent='View transaction';a.target='_blank';a.rel='noopener';res.appendChild(a);}
+}
+fetch('/status').then(function(r){return r.json()}).then(function(s){
+  st=s;info.textContent='';
+  line('Per request',scn(s.amount_per_request,s.display_exponent)+' SCN');
+  if(s.balance!==null)line('Faucet balance',scn(s.balance,s.display_exponent)+' SCN');
+  line('Left today',scn(s.budget_left,s.display_exponent)+' SCN');
+  line('Chain',s.chain_id);
+}).catch(function(){});
+document.getElementById('f').addEventListener('submit',function(e){
+  e.preventDefault();btn.disabled=true;show('','Sending...');
+  fetch('/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:document.getElementById('addr').value.trim()})})
+  .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j}},function(){return {ok:false,j:{message:'The faucet took too long to answer. The transfer may still arrive: check your balance before asking again.'}}})})
+  .then(function(x){
+    if(x.ok){
+      var base=st?st.explorer_tx_url:'https://explorer.saicon.world/saicon/tx/';
+      show('ok',(x.j.status==='pending'?'Sent, waiting for the block. ':'Sent. ')+'Transaction '+x.j.txhash,base+encodeURIComponent(x.j.txhash));
+    }else{
+      var m=x.j.message||'Something went wrong.';
+      if(x.j.retry_after_seconds){var h=Math.ceil(x.j.retry_after_seconds/3600);m+=' (about '+h+' h)';}
+      show('err',m);
+    }
+  }).catch(function(){show('err','Could not reach the faucet. Try again.');})
+  .then(function(){btn.disabled=false;});
+});
+})();
+</script>
+</body>
+</html>

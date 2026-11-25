@@ -20,7 +20,7 @@ analytics → off-chain backend; programmable app logic → CosmWasm (Q1).
 
 ---
 
-## 1. Current state (as-built, v0.10.1 — 2026-11-17)
+## 1. Current state (as-built, v0.10.2 — 2026-11-25)
 
 ### 1.1 Modules
 
@@ -41,6 +41,8 @@ analytics → off-chain backend; programmable app logic → CosmWasm (Q1).
 | Service | What it does | Status |
 |---|---|---|
 | `indexer/` | follows blocks for the one fact the chain cannot answer about itself — which validator proposed which block, carried in every header and indexed by no query — and at each epoch close reads the numbers the chain computed for itself. Serves `/v1/scoreboard`, `/v1/validators/{op}`, `/v1/validators/{op}/epochs`, `/v1/status`, `/v1/concentration`, `/v1/concentration/epochs`, `/v1/entities`. Recomputes nothing the chain computes; derives the concentration measures (top-10 share, Nakamoto by validator and by attested entity, curves) at each epoch's last block from the validator set and the registry read at that height, both stored and served (spec the design notes); absence is `NULL`, never `0`; compliance read from `x/compliance`, never the registry mirror (V-4.1). Go + SQLite (`modernc.org/sqlite`, CGO-free like the rest of the repo) | ✅ v1, gated in CI · public at scoreboard.saicon.world; the concentration endpoints (S8 W4) deploy with the `v0.10.0` upgrade; the scoreboard page reads it |
+| `faucet/` | DevNet test-token faucet (Go): **100 SCN per request** — the DevNet's minimum delegation, so one request is enough to try delegating — one payout per address and per client network in each 24 h window, **5,000 SCN** daily budget (`FAUCET_AMOUNT`, `FAUCET_DAILY_BUDGET`). A bad address gets a plain instruction (`Enter a full SAiCoN address: it starts with saicon1.`); the parser's reason goes to the log. The page is the explorer's Faucet tab (`/saicon/faucet`), which fills in the connected wallet's address; the API is the explorer's `/faucet-api/` route. Footer links to the support channel below. Validator stake is not handed out | ✅ S9 · `faucet/README.md` |
+| the block explorer | ping.pub fork patched at build time by its branding script. The brand colour is a constant in that file (no `THEME_COLOR` build argument: a host `.env` once turned the deployed explorer purple). **Wallet entry:** "Add SAiCoN to wallet" in the header and the sidebar opens one page that registers the chain in Keplr, Leap or MetaMask (Leap Snap), gas price step 0/0/0 for the zero-fee chain; the header Connect button does not register a chain itself (the connect widget only calls `enable`), so its cog and its "no chain info" link lead to the same page | ✅ S9 |
 
 It reads a node, it does not extend the chain, so nothing here is consensus-critical.
 Two things about it are operationally load-bearing: it must not point at a validator
@@ -90,6 +92,10 @@ requires a minimum number of validators.
 
 Public devnet: 1 node (`saicon-devnet-fsn1-01`), explorer at explorer.saicon.world, open REST
 at api.saicon.world; the indexer's endpoint at scoreboard.saicon.world.
+Operator support channel (S9): GitHub Issues on `github.com/saicon-network/saicon`, with an
+*Node operator question* form (version, profile, Docker or binary, chain id, expected vs actual,
+log lines, a reminder never to post a key) and a *Bug report* form in `.github/ISSUE_TEMPLATE/`;
+linked from `MULTINODE-JOIN.md` §10, the faucet README and the faucet page.
 
 ### 1.3 Runtime invariants (EndBlock assertions that panic — fail-loud)
 
@@ -113,9 +119,8 @@ at api.saicon.world; the indexer's endpoint at scoreboard.saicon.world.
 PS single-signal, no WARP · voting power is stock stake-weighted (no selection layer) ·
 stake caps: the backstop leaves two routes open (below) · delegation router shipped in v0.9.0 (S7),
 the weight function replaced when the S-13 run lands · entity registry, VRF randomness (shadow mode) and the coordinated-attack sanction built in S8 (v0.10.0), with the scope below ·
-**V-4.1 has no runtime check** (§1.3) · sentry layer designed in S3, adopted before S9, so
-validators currently run with the SDK's default open peer exchange (§2.10.2) · the DevNet runs
-v0.9.1 on one validator (v0.9.0 from 22 Oct, upgraded in place on 26 Oct; the in-place upgrade to
+**V-4.1 has no runtime check** (§1.3) · sentry layer designed in S3, adopted before S9: the operator how-to is MULTINODE-JOIN §7 ("Run the validator behind sentries", S9) and `./scripts/test-sentry-layout.sh` passes 22/22 against the sentry overlay, while the DevNet's own validator keeps the SDK's default open peer exchange; moving it behind two sentries is planned for S10 (§2.10.2) · the DevNet runs
+v0.10.1 under Cosmovisor on one validator (the node reports the build id `dev-5460e7d3`; v0.9.0 from 22 Oct, upgraded in place on 26 Oct; the in-place upgrade to
 v0.10.0 is the devnet operations runbook), so multi-validator behaviour — the
 seat cap across validators, the VRF quorum, the coordinated-attack arming — is verified on the
 local three-validator testnet and in the app tests, not on the DevNet.
@@ -718,7 +723,7 @@ different providers.
 Today the nodes run `pex = true` with `private_peer_ids = ""`, which is the SDK default and
 appropriate for a single-operator devnet. **This is the higher priority of the two and it is
 ADR-level:** the middle profile is a disk question, the sentry layout is a liveness one, and it
-changes what an invited operator is told to run — so it lands before **S9**. Written up as
+changes what an invited operator is told to run — so it lands before **S9**. *Update:* the operator how-to shipped in S9 (MULTINODE-JOIN §7, "Run the validator behind sentries"); moving the DevNet's own validator behind two sentries is planned for S10. Written up as
 [ADR-0015](adr/ADR-0015-sentry-layout-and-node-exposure.md), which also decides that a sentry
 takes the `full` profile: retention and exposure are separate axes, so that is a choice rather
 than a consequence.

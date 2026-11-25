@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in the chain, the CLI, the faucet or the explorer behaves wrongly.
+title: ""
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste a mnemonic, a private key, or the contents of `priv_validator_key.json`.**
+        For running a node (sync, peers, staking steps) use the *Node operator question* form instead.
+        Security vulnerabilities do not belong here: follow SECURITY.md and write to security@saicon.world.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - chain (consensus, modules, transactions)
+        - saicond CLI
+        - REST / RPC API
+        - faucet
+        - explorer
+        - documentation
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`saicond version`, or the node version the API reports at /cosmos/base/tendermint/v1beta1/node_info."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Commands or clicks, with the transaction hash or height if there is one.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      render: text

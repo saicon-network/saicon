@@ -1,0 +1,80 @@
+{
+  "$schema": "../../chain.schema.json",
+  "chain_name": "saicondevnet",
+  "chain_type": "cosmos",
+  "chain_id": "saicon-devnet-1",
+  "pretty_name": "SAiCoN DevNet",
+  "description": "The development network of SAiCoN, a Proof-of-Participation chain: validators earn their place by taking part, and SCN is its staking and participation token.",
+  "status": "live",
+  "network_type": "devnet",
+  "bech32_prefix": "saicon",
+  "daemon_name": "saicond",
+  "node_home": "$HOME/.saicon",
+  "key_algos": ["secp256k1"],
+  "slip44": 118,
+  "fees": {
+    "fee_tokens": [
+      {
+        "denom": "nscn",
+        "fixed_min_gas_price": 0,
+        "low_gas_price": 0,
+        "average_gas_price": 0,
+        "high_gas_price": 0
+      }
+    ]
+  },
+  "staking": {
+    "staking_tokens": [{ "denom": "nscn" }]
+  },
+  "codebase": {
+    "git_repo": "https://github.com/saicon-network/saicon",
+    "recommended_version": "v0.10.1",
+    "compatible_versions": ["v0.10.0", "v0.10.1"],
+    "language": { "type": "go", "version": "1.25" },
+    "binaries": {
+      "linux/amd64": "https://github.com/saicon-network/saicon/releases/download/v0.10.1/saicond_v0.10.1_linux_amd64?checksum=sha256:128b8b642e834504805f0d2b4d6077be85e395f80335a401e657083bfe11b5d5",
+      "linux/arm64": "https://github.com/saicon-network/saicon/releases/download/v0.10.1/saicond_v0.10.1_linux_arm64?checksum=sha256:2d5da28975c1a3bfbd7ec153623faf2c33b4d4d016c5d7778a7d0c64c802a5e3",
+      "darwin/arm64": "https://github.com/saicon-network/saicon/releases/download/v0.10.1/saicond_v0.10.1_darwin_arm64?checksum=sha256:85cbab6817dc0219d9a2a12af8e327f705dda96a0af37421779f0be995ba9094"
+    },
+    "sdk": { "type": "cosmos", "version": "0.53.8" },
+    "consensus": { "type": "cometbft", "version": "0.38.25" },
+    "genesis": {
+      "genesis_url": "https://raw.githubusercontent.com/saicon-network/saicon/main/chain/networks/saicon-devnet-1/genesis.json"
+    }
+  },
+  "logo_URIs": {
+    "png": "https://raw.githubusercontent.com/cosmos/chain-registry/master/testnets/saicondevnet/images/scn.png",
+    "svg": "https://raw.githubusercontent.com/cosmos/chain-registry/master/testnets/saicondevnet/images/scn.svg"
+  },
+  "images": [
+    {
+      "png": "https://raw.githubusercontent.com/cosmos/chain-registry/master/testnets/saicondevnet/images/scn.png",
+      "svg": "https://raw.githubusercontent.com/cosmos/chain-registry/master/testnets/saicondevnet/images/scn.svg",
+      "theme": { "circle": false, "dark_mode": true }
+    }
+  ],
+  "peers": {
+    "seeds": [],
+    "persistent_peers": [
+      {
+        "id": "d6dd52e389f126b9323cd353fd65afed2d871aaf",
+        "address": "p2p.saicon.world:26656",
+        "provider": "SAiCoN"
+      }
+    ]
+  },
+  "apis": {
+    "rpc": [{ "address": "https://rpc.saicon.world", "provider": "SAiCoN" }],
+    "rest": [{ "address": "https://api.saicon.world", "provider": "SAiCoN" }],
+    "grpc": []
+  },
+  "explorers": [
+    {
+      "kind": "ping.pub",
+      "url": "https://explorer.saicon.world/saicon",
+      "tx_page": "https://explorer.saicon.world/saicon/tx/${txHash}",
+      "account_page": "https://explorer.saicon.world/saicon/account/${accountAddress}"
+    }
+  ],
+  "keywords": ["proof-of-participation", "devnet"]
+}

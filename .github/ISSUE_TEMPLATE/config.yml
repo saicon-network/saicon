@@ -3,3 +3,6 @@ contact_links:
   - name: Report a security vulnerability
     url: https://github.com/saicon-network/saicon/blob/main/SECURITY.md
     about: Do not open a public issue for a vulnerability. Read SECURITY.md and write to security@saicon.world.
+  - name: Join guide
+    url: https://github.com/saicon-network/saicon/blob/main/chain/docs/MULTINODE-JOIN.md
+    about: Step-by-step guide to running a node and a validator on the DevNet.

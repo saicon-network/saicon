@@ -1,0 +1,72 @@
+name: Node operator question
+description: Help running a SAiCoN node or validator (sync, peers, keys, staking, sentries).
+title: ""
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste a mnemonic, a private key, or the contents of `priv_validator_key.json` or `node_key.json`.**
+        Addresses (`saicon1...`, `saiconvaloper...`), node ids and transaction hashes are public and welcome.
+  - type: input
+    id: version
+    attributes:
+      label: Node version
+      description: Output of `saicond version` (for Docker, the image tag).
+      placeholder: "dev-5460e7d3"
+    validations:
+      required: true
+  - type: dropdown
+    id: profile
+    attributes:
+      label: Profile
+      options:
+        - validator
+        - full
+        - archive
+        - sentry (full node in front of a validator)
+        - not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: How it runs
+      options:
+        - Docker (published image)
+        - Docker (built from source)
+        - Binary (systemd or by hand)
+    validations:
+      required: true
+  - type: input
+    id: chain_id
+    attributes:
+      label: Chain id
+      placeholder: saicon-devnet-1
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened instead
+      description: Include the exact error text and the command that produced it.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: A few dozen lines around the problem, not the whole file.
+      render: text
+  - type: textarea
+    id: status
+    attributes:
+      label: Node status (optional)
+      description: "`saicond status` (sync_info only) and, for peer problems, `n_peers` from the RPC `/net_info`."
+      render: text

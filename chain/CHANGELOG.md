@@ -3,6 +3,32 @@
 All notable changes to the SAiCoN chain. Versions are git tags; the binary
 reports its version via `git describe`.
 
+## v0.10.2 — 2026-11-25
+
+Not state-breaking: the chain code is v0.10.0's, as in v0.10.1, and the DevNet runs this release
+with no upgrade. The release opens the DevNet to operators outside the team.
+
+### Added
+
+- **The DevNet's network files**, `networks/saicon-devnet-1/`: the node's own `genesis.json`
+  with its SHA-256 in `genesis.json.sha256`, and `chain.json` / `assetlist.json` in the
+  chain-registry format (chain id, prefix, zero fees, peer, public RPC and REST, explorer,
+  release binaries with checksums, SCN with 8 decimals). `REGISTRY-PR.md` is the package for the
+  registry pull request.
+- **Joining as an outside operator**, `docs/MULTINODE-JOIN.md`: state sync from the public RPC
+  (the DevNet upgraded in place, so the current build cannot replay its first blocks), the three
+  node profiles, a validator that talks only to its own sentries and is never announced, and
+  where to ask for help. `./scripts/test-sentry-layout.sh` exercises the sentry layout.
+- **Test tokens.** The DevNet faucet (`faucet/` at the repository root) gives 100 SCN per
+  request, one minimum delegation, once per address and once per network every 24 hours, within
+  a 5,000 SCN daily budget. It is a tab of the explorer, which fills in the address of a connected
+  wallet.
+- **Operator support** through GitHub Issues forms: a node operator question and a bug report.
+
+### Fixed
+
+- `docker/alpine-sources.sh` fetches upstream archives through Alpine's distfiles mirror.
+
 ## v0.10.1 — 2026-11-17
 
 Not state-breaking: the chain code is v0.10.0's, and a v0.10.0 network runs this release with
