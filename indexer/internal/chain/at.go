@@ -109,12 +109,8 @@ func fetchJSON(ctx context.Context, c *http.Client, url string, pin *int64, out 
 	switch resp.StatusCode {
 	case http.StatusOK:
 		if pin != nil {
-			got := strings.TrimSpace(resp.Header.Get(heightEchoHeader))
-			if got != want {
-				return fmt.Errorf("%s answered for height %q, asked for %s (header %s)", url, got, want, heightEchoHeader)
-			}
-			if g := strings.TrimSpace(resp.Header.Get(heightEchoGRPCHeader)); g != "" && g != want {
-				return fmt.Errorf("%s answered for height %q, asked for %s (header %s)", url, g, want, heightEchoGRPCHeader)
+			if err := checkEcho(resp, url, want); err != nil {
+				return err
 			}
 		}
 		return json.NewDecoder(resp.Body).Decode(out)
@@ -134,6 +130,20 @@ func fetchJSON(ctx context.Context, c *http.Client, url string, pin *int64, out 
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, errorBodyLimit))
 		return &statusError{url: url, status: resp.StatusCode, body: string(b)}
 	}
+}
+
+// checkEcho is the rule for a 200 to a pinned read: X-Cosmos-Block-Height must
+// name the height asked for, and Grpc-Metadata-X-Cosmos-Block-Height must agree
+// when present.
+func checkEcho(resp *http.Response, url, want string) error {
+	got := strings.TrimSpace(resp.Header.Get(heightEchoHeader))
+	if got != want {
+		return fmt.Errorf("%s answered for height %q, asked for %s (header %s)", url, got, want, heightEchoHeader)
+	}
+	if g := strings.TrimSpace(resp.Header.Get(heightEchoGRPCHeader)); g != "" && g != want {
+		return fmt.Errorf("%s answered for height %q, asked for %s (header %s)", url, g, want, heightEchoGRPCHeader)
+	}
+	return nil
 }
 
 // EntityLayerFrom reports the first height at which the entity stores exist. present is

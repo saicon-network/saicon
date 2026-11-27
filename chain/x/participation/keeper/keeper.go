@@ -35,6 +35,11 @@ type Keeper struct {
 	EpochBlocksSigned collections.Map[[]byte, uint64]
 	EpochBlocksMissed collections.Map[[]byte, uint64]
 
+	// Warp stores each validator's WARP (ADR-0009 §2), keyed by operator
+	// address bytes. ComputeEpoch writes it for every scored validator and
+	// ZeroReputation zeroes it; nothing else writes it.
+	Warp collections.Map[[]byte, types.WarpState]
+
 	validatorregistryKeeper types.ValidatorregistryKeeper
 	stakingKeeper           types.StakingKeeper
 }
@@ -79,6 +84,7 @@ func NewKeeper(
 		),
 		EpochBlocksSigned: collections.NewMap(sb, types.EpochBlocksSignedKey, "epoch_blocks_signed", collections.BytesKey, collections.Uint64Value),
 		EpochBlocksMissed: collections.NewMap(sb, types.EpochBlocksMissedKey, "epoch_blocks_missed", collections.BytesKey, collections.Uint64Value),
+		Warp:              collections.NewMap(sb, types.WarpKey, "warp", collections.BytesKey, codec.CollValue[types.WarpState](cdc)),
 	}
 
 	schema, err := sb.Build()

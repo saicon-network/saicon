@@ -6,11 +6,15 @@ import (
 	"cosmossdk.io/math"
 )
 
-// NewParams creates a new Params instance.
+// NewParams creates a new Params instance with the default WARP parameters.
 func NewParams(epochLengthBlocks uint64, epDecay math.LegacyDec) Params {
 	return Params{
 		EpochLengthBlocks: epochLengthBlocks,
 		EpDecay:           epDecay,
+		WarpFall:          DefaultWarpFall(),
+		WarpRise:          DefaultWarpRise(),
+		WarpInitial:       DefaultWarpInitial(),
+		WarpThreshold:     DefaultWarpThreshold(),
 	}
 }
 
@@ -31,5 +35,5 @@ func (p Params) Validate() error {
 	if p.EpDecay.IsNegative() || p.EpDecay.GTE(math.LegacyOneDec()) {
 		return fmt.Errorf("ep_decay must be in [0,1), got %s", p.EpDecay)
 	}
-	return nil
+	return p.ValidateWarp()
 }

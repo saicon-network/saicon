@@ -68,6 +68,15 @@ func decayEP(ep math.Int, idle int64, epDecay math.LegacyDec) math.Int {
 // epoch a validator is processed (gaps where it left the bonded set are charged
 // when it returns). With ep_decay = 0 (default) there is no decay.
 //
+// WARP (ADR-0009 §2, S10 rulings R4-R6) is stepped in the same pass, for the
+// same validators: computed_score × 100 is the PS it reads, the starting point
+// is the stored WARP or warp_initial for a validator never scored, and the
+// snapshot carries the value after the step. A validator that is not scored
+// (V-7) is not stepped, so its WARP is frozen until it is ACTIVE again. WARP
+// never gets in EP's way: if the WARP parameters do not validate, or one
+// validator's stored WARP is unreadable, that WARP is left as it was and logged,
+// and the snapshot and EP are written as before.
+//
 // After all validators are processed, the per-epoch counters are reset via
 // ResetEpochCounters so the next epoch starts from zero.
 func (k Keeper) ComputeEpoch(ctx context.Context, epochID uint64) error {
@@ -87,6 +96,13 @@ func (k Keeper) ComputeEpoch(ctx context.Context, epochID uint64) error {
 		return perr
 	}
 	epDecay := params.EpDecay
+	logger := sdk.UnwrapSDKContext(ctx).Logger()
+	warpOn := true
+	if werr := params.Warp().Validate(); werr != nil {
+		warpOn = false
+		logger.Error("participation: WARP parameters invalid; WARP not stepped this epoch",
+			"epoch_id", epochID, "err", werr)
+	}
 
 	var iterErr error
 	err := k.stakingKeeper.IterateBondedValidatorsByPower(ctx, func(_ int64, v stakingtypes.ValidatorI) bool {
@@ -127,6 +143,17 @@ func (k Keeper) ComputeEpoch(ctx context.Context, epochID uint64) error {
 			UptimeFraction:    uptime,
 			ComputedScore:     score,
 			ComputedAt:        computedAt,
+		}
+		var warp *warpUpdate
+		if warpOn {
+			u, e := k.nextWarp(ctx, valAddr, score, params)
+			if e != nil {
+				logger.Error("participation: WARP not stepped for a validator",
+					"validator", valAddr.String(), "epoch_id", epochID, "err", e)
+			} else {
+				warp = &u
+				snap.Warp = &u.after
+			}
 		}
 		if e := k.SetSnapshot(ctx, epochID, valAddr, snap); e != nil {
 			iterErr = e
@@ -176,6 +203,13 @@ func (k Keeper) ComputeEpoch(ctx context.Context, epochID uint64) error {
 			sdk.NewAttribute(types.AttributeKeyScore, score.String()),
 			sdk.NewAttribute(types.AttributeKeyEPAfter, epState.AccumulatedEp.String()),
 		))
+
+		if warp != nil {
+			if e := k.storeWarp(ctx, valAddr, epochID, *warp, params.WarpThreshold); e != nil {
+				iterErr = e
+				return true
+			}
+		}
 		return false
 	})
 	if err != nil {

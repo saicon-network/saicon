@@ -247,13 +247,16 @@ type mockParticipationKeeper struct {
 	zeroed    map[string]bool
 	epTouched bool
 	zeroErr   error
+	// epoch is the epoch the last ZeroReputation call named.
+	epoch uint64
 }
 
-func (m *mockParticipationKeeper) ZeroReputation(_ context.Context, addr sdk.ValAddress, _ uint64) error {
+func (m *mockParticipationKeeper) ZeroReputation(_ context.Context, addr sdk.ValAddress, epoch uint64) error {
 	if m.zeroErr != nil {
 		return m.zeroErr
 	}
 	m.zeroed[addr.String()] = true
+	m.epoch = epoch
 	return nil
 }
 

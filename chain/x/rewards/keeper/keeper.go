@@ -47,6 +47,8 @@ type Keeper struct {
 	participationKeeper     types.ParticipationKeeper
 	validatorregistryKeeper types.ValidatorregistryKeeper
 	complianceKeeper        types.ComplianceKeeper
+	stakeengineKeeper       types.StakeengineKeeper
+	distributionKeeper      types.DistributionKeeper
 }
 
 func NewKeeper(
@@ -61,6 +63,8 @@ func NewKeeper(
 	participationKeeper types.ParticipationKeeper,
 	validatorregistryKeeper types.ValidatorregistryKeeper,
 	complianceKeeper types.ComplianceKeeper,
+	stakeengineKeeper types.StakeengineKeeper,
+	distributionKeeper types.DistributionKeeper,
 ) Keeper {
 	if _, err := addressCodec.BytesToString(authority); err != nil {
 		panic(fmt.Sprintf("invalid authority address %s: %s", authority, err))
@@ -80,6 +84,8 @@ func NewKeeper(
 		participationKeeper:     participationKeeper,
 		validatorregistryKeeper: validatorregistryKeeper,
 		complianceKeeper:        complianceKeeper,
+		stakeengineKeeper:       stakeengineKeeper,
+		distributionKeeper:      distributionKeeper,
 		Params:                  collections.NewItem(sb, types.ParamsKey, "params", codec.CollValue[types.Params](cdc)),
 		RewardSnapshot: collections.NewMap(
 			sb,

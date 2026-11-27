@@ -37,6 +37,13 @@ import (
 // RunMigrations initialises x/randomness's round 1 from its default genesis.
 const UpgradeV0100 = "v0.10.0"
 
+// UpgradeV0110 is the second in-place upgrade. Its S10 part: x/participation
+// goes to consensus version 2 (the WARP engine, whose Migrate1to2 writes the
+// four WARP params), and x/rewards pays the PoP share through x/distribution
+// (behaviour only, no store change). No store is added, so no store loader.
+// What S10 checks after the migrations is in upgrades_s10.go.
+const UpgradeV0110 = "v0.11.0"
+
 // legacyAttestationDomain prefixes the fixed attestation hash every legacy
 // entity carries: the hash of a sentence nobody signed, so it names the upgrade
 // and the validator and nothing else (spec J12).
@@ -64,6 +71,16 @@ func (app *App) registerUpgrades() {
 			return vm, applyV0100(ctx, plan, app.EntityregistryKeeper, app.StakingKeeper,
 				app.ValidatorregistryKeeper, app.SlashingKeeper, app.ComplianceKeeper,
 				app.ConsensusParamsKeeper, authtypes.NewModuleAddress(govtypes.ModuleName))
+		})
+
+	app.UpgradeKeeper.SetUpgradeHandler(UpgradeV0110,
+		func(ctx context.Context, _ upgradetypes.Plan, fromVM module.VersionMap) (module.VersionMap, error) {
+			vm, err := app.ModuleManager.RunMigrations(ctx, app.Configurator(), fromVM)
+			if err != nil {
+				return nil, err
+			}
+			logS10State(sdk.UnwrapSDKContext(ctx), app.ParticipationKeeper)
+			return vm, nil
 		})
 
 	info, err := app.UpgradeKeeper.ReadUpgradeInfoFromDisk()

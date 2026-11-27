@@ -47,6 +47,8 @@ func initFixture(t *testing.T) *fixture {
 		nil,               // participationKeeper
 		nil,               // validatorregistryKeeper
 		nil,               // complianceKeeper
+		nil,               // stakeengineKeeper
+		nil,               // distributionKeeper
 	)
 
 	// Initialize params

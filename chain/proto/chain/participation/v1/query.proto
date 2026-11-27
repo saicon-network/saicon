@@ -5,6 +5,7 @@ import "amino/amino.proto";
 import "chain/participation/v1/params.proto";
 import "chain/participation/v1/types.proto";
 import "cosmos/base/query/v1beta1/pagination.proto";
+import "cosmos_proto/cosmos.proto";
 import "gogoproto/gogo.proto";
 import "google/api/annotations.proto";
 
@@ -35,6 +36,94 @@ service Query {
   rpc SnapshotRange(QuerySnapshotRangeRequest) returns (QuerySnapshotRangeResponse) {
     option (google.api.http).get = "/saicon/chain/participation/v1/snapshots/{validator_address}/{from_epoch}/{to_epoch}";
   }
+
+  // Warp queries a validator's WARP (ADR-0009 §2) and the parameters it is
+  // judged by. A validator never scored nor punished has none: NotFound.
+  rpc Warp(QueryWarpRequest) returns (QueryWarpResponse) {
+    option (google.api.http).get = "/saicon/chain/participation/v1/warp/{validator_address}";
+  }
+
+  // Warps lists every stored WARP, paginated, in operator address byte order.
+  rpc Warps(QueryWarpsRequest) returns (QueryWarpsResponse) {
+    option (google.api.http).get = "/saicon/chain/participation/v1/warp";
+  }
+}
+
+// WarpParams is the WARP part of Params, as the WARP queries report it.
+message WarpParams {
+  string fall = 1 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string rise = 2 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string initial = 3 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  string threshold = 4 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// WarpRecord is one validator's WARP as the queries report it.
+message WarpRecord {
+  string validator_address = 1;
+  // value is on 0-100.
+  string value = 2 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // last_epoch is the epoch that last stepped WARP; 0 for a validator punished
+  // before it was ever scored.
+  uint64 last_epoch = 3;
+  // eligible is WARP's own predicate, value >= threshold. Eligibility for the
+  // voting-power pool also needs C = 1 and registry ACTIVE; the rewards
+  // module's voting_power_preview reports that conjunction.
+  bool eligible = 4;
+}
+
+// QueryWarpRequest is the request for Query/Warp.
+message QueryWarpRequest {
+  string validator_address = 1;
+}
+
+// QueryWarpResponse is the response for Query/Warp.
+message QueryWarpResponse {
+  WarpRecord warp = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  WarpParams params = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+}
+
+// QueryWarpsRequest is the request for Query/Warps.
+message QueryWarpsRequest {
+  cosmos.base.query.v1beta1.PageRequest pagination = 1;
+}
+
+// QueryWarpsResponse is the response for Query/Warps.
+message QueryWarpsResponse {
+  repeated WarpRecord warps = 1 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  WarpParams params = 2 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  cosmos.base.query.v1beta1.PageResponse pagination = 3;
 }
 
 // QueryEpRequest is the request for Query/Ep.

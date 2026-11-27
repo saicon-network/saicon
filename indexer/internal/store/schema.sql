@@ -1,5 +1,11 @@
 -- Every row carries chain_id. The devnet will be reset; a naive height cursor
 -- would then splice two chains into one series.
+--
+-- New tables arrive through CREATE TABLE IF NOT EXISTS, never ALTER. The one
+-- exception is migrate() in store.go, which adds the columns it knows by name to
+-- `chains` and `epoch_snapshots` when a database written by an older build lacks
+-- them. Nothing else in this file may name such a column: this file runs before
+-- migrate() does.
 CREATE TABLE IF NOT EXISTS chains (
     chain_id            TEXT PRIMARY KEY,
     indexed_height      INTEGER NOT NULL DEFAULT 0,
@@ -54,6 +60,10 @@ CREATE TABLE IF NOT EXISTS epoch_snapshots (
     reward_eligible INTEGER,
     reward_reason   TEXT,
     proposals       INTEGER,
+    -- WARP after this epoch's update, exactly as the chain wrote it (a LegacyDec
+    -- string). NULL for a snapshot that carries none and for rows read before
+    -- this column existed (added by migrate()).
+    warp            TEXT,
     PRIMARY KEY (chain_id, epoch, operator)
 );
 
@@ -152,4 +162,47 @@ CREATE TABLE IF NOT EXISTS entity_seats (
     frozen_reason   TEXT,
     frozen_height   INTEGER,
     PRIMARY KEY (chain_id, epoch, entity_id, operator)
+);
+
+-- Voting-power preview (S10). x/rewards' voting_power_preview, read once per
+-- epoch at the epoch's last height H = epoch * epoch_length.
+
+-- One row per epoch whose preview is still to be read: the epoch reader adds it
+-- when it finishes the epoch, the preview pass removes it in the transaction
+-- that writes the epoch's vp_preview_epochs row. attempts counts the transient
+-- failures so far; it survives a restart, so the give-up rule does too.
+CREATE TABLE IF NOT EXISTS vp_preview_due (
+    chain_id TEXT NOT NULL,
+    epoch    INTEGER NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (chain_id, epoch)
+);
+
+-- One row per epoch whose read came to an end, available or not. A row with
+-- a code never replaces a row that holds a preview.
+CREATE TABLE IF NOT EXISTS vp_preview_epochs (
+    chain_id    TEXT NOT NULL,
+    epoch       INTEGER NOT NULL,
+    height      INTEGER NOT NULL,            -- H, the height the read was pinned to
+    unavailable TEXT,                        -- NULL when read; else route_missing | params_invalid | caps_missing | pruned | error
+    total_vp    TEXT,                        -- nscn; NULL when unavailable
+    threshold   TEXT,                        -- params.warp_threshold at H; NULL when unavailable
+    cap         TEXT,                        -- params.validator_cap at H, nscn; NULL when unavailable
+    PRIMARY KEY (chain_id, epoch)
+);
+
+-- One row per bonded validator of an available preview; none for an unavailable one.
+-- Every value is the chain's string: the shares are its 6-decimal truncated ones.
+CREATE TABLE IF NOT EXISTS vp_preview (
+    chain_id      TEXT NOT NULL,
+    epoch         INTEGER NOT NULL,
+    operator      TEXT NOT NULL,             -- as x/staking names it
+    vp            TEXT NOT NULL,             -- nscn
+    vp_share      TEXT NOT NULL,             -- "0" for an ineligible validator
+    stock_share   TEXT NOT NULL,
+    eligible      INTEGER NOT NULL,
+    reason        TEXT,                      -- NULL when eligible
+    warp          TEXT NOT NULL,             -- the WARP the preview used (warp_initial when unmeasured)
+    warp_measured INTEGER NOT NULL,
+    PRIMARY KEY (chain_id, epoch, operator)
 );

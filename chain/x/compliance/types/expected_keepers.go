@@ -65,9 +65,10 @@ type SlashingKeeper interface {
 // expose a way to. The dependency runs compliance -> participation only;
 // x/participation knows nothing of compliance, so there is no cycle.
 type ParticipationKeeper interface {
-	// ZeroReputation zeroes the in-flight epoch's participation snapshot (and,
-	// once the engine exists, WARP). It never touches EP and never rewrites a
-	// closed epoch.
+	// ZeroReputation zeroes WARP and the participation snapshot of the given
+	// epoch, if there is one. It never touches EP. The caller passes the
+	// in-flight epoch, ceil(height / EpochLengthBlocks), so a closed epoch is
+	// never rewritten.
 	ZeroReputation(ctx context.Context, addr sdk.ValAddress, epoch uint64) error
 	// EpochLengthBlocks lets compliance work out which epoch is in flight, from
 	// participation's own param rather than a second copy.

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"cosmossdk.io/core/address"
+	corestore "cosmossdk.io/core/store"
 	storetypes "cosmossdk.io/store/types"
 	addresscodec "github.com/cosmos/cosmos-sdk/codec/address"
 	"github.com/cosmos/cosmos-sdk/runtime"
@@ -22,6 +23,8 @@ type fixture struct {
 	ctx          context.Context
 	keeper       keeper.Keeper
 	addressCodec address.Codec
+	// storeService is set by initFixture only, for tests that write raw bytes.
+	storeService corestore.KVStoreService
 }
 
 func initFixture(t *testing.T) *fixture {
@@ -54,5 +57,6 @@ func initFixture(t *testing.T) *fixture {
 		ctx:          ctx,
 		keeper:       k,
 		addressCodec: addressCodec,
+		storeService: storeService,
 	}
 }

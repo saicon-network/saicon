@@ -47,13 +47,27 @@ import (
 // # WARP
 //
 // WARP → 0 is the load-bearing half of the Register's rule, because WARP is
-// persistent smoothed state that would otherwise recover at 0.10 per epoch. The
-// WARP engine does not exist yet (ADR-0009), so there is nothing to zero today;
-// when it ships, it is zeroed HERE and nowhere else.
+// persistent smoothed state that would otherwise recover at 0.10 per epoch. It
+// is zeroed HERE and nowhere else (S10 ruling R7), whether or not the validator
+// has a snapshot for this epoch: a validator punished before it was ever scored
+// gets a zero row, so it does not later start from warp_initial. The epoch WARP
+// was last measured in is kept, because punishment is not a measurement.
 //
-// A validator with no snapshot for this epoch is a no-op: this runs inside a
-// slashing hook, where returning an error would halt the chain.
+// If the in-flight snapshot carries a warp, that is zeroed with the score. A
+// snapshot written before the engine existed carries none, and none is
+// invented for it. The epoch is the caller's to name: x/compliance passes the
+// in-flight one, ceil(height / L), whose snapshot is written only at the end
+// of its closing block, after any sanction in it. So in practice a sanction
+// finds no snapshot and only WARP changes.
+//
+// Without a snapshot for this epoch only WARP changes. Errors are returned to
+// the caller, which runs inside a slashing hook and logs them rather than halt
+// the chain.
 func (k Keeper) ZeroReputation(ctx context.Context, addr sdk.ValAddress, epoch uint64) error {
+	if err := k.zeroWarp(ctx, addr); err != nil {
+		return err
+	}
+
 	snap, found, err := k.GetSnapshot(ctx, epoch, addr)
 	if err != nil {
 		return err
@@ -64,6 +78,10 @@ func (k Keeper) ZeroReputation(ctx context.Context, addr sdk.ValAddress, epoch u
 
 	snap.ComputedScore = math.LegacyZeroDec()
 	snap.UptimeFraction = math.LegacyZeroDec()
+	if snap.Warp != nil {
+		zero := math.LegacyZeroDec()
+		snap.Warp = &zero
+	}
 
 	// blocks_signed / blocks_missed / votes_participated are left as recorded:
 	// they are measurements of what happened, not a score. Rewriting them would

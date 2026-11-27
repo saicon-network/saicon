@@ -91,6 +91,7 @@ func TestGasOffset_ComposesWithTheCarriedRemainder(t *testing.T) {
 	carry := math.NewInt(500_000_000)
 	require.NoError(t, f.keeper.AddObservedGasFees(f.ctx, fees))
 	require.NoError(t, f.keeper.SetRemainder(f.ctx, carry))
+	f.bank.credit(types.ModuleName, carry) // a carry is value the module account already holds
 
 	require.NoError(t, f.keeper.DistributeEpochRewards(f.ctx, 8))
 

@@ -26,6 +26,11 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 						{ProtoField: "epoch_id"},
 					},
 				},
+				{
+					RpcMethod: "VotingPowerPreview",
+					Use:       "voting-power-preview",
+					Short:     "Preview each bonded validator's voting power under ADR-0008 (read-only; consensus power is unchanged)",
+				},
 			},
 		},
 		Tx: &autocliv1.ServiceCommandDescriptor{

@@ -5,6 +5,7 @@ import (
 
 	"cosmossdk.io/core/address"
 	"errors"
+	"fmt"
 	"testing"
 
 	"cosmossdk.io/math"
@@ -15,6 +16,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	moduletestutil "github.com/cosmos/cosmos-sdk/types/module/testutil"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	distrtypes "github.com/cosmos/cosmos-sdk/x/distribution/types"
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
 	"github.com/stretchr/testify/require"
 
@@ -28,21 +30,55 @@ import (
 
 // --- mock validator -------------------------------------------------------
 
-// fakeValidator embeds ValidatorI (nil) and overrides only GetOperator, the
-// single method DistributeEpochRewards uses. Any other call would panic, which
-// is acceptable for these focused tests.
+// fakeValidator embeds ValidatorI (nil) and overrides only the methods
+// DistributeEpochRewards uses: GetOperator, and GetTokens for the payout leg's
+// allocatable check. Any other call would panic, which is acceptable for these
+// focused tests.
 type fakeValidator struct {
 	stakingtypes.ValidatorI
 	operator string
+	tokens   math.Int // nil => a positive stake; zero is the not-allocatable case (S10 R3)
 }
 
 func (f fakeValidator) GetOperator() string { return f.operator }
+
+func (f fakeValidator) GetTokens() math.Int {
+	if f.tokens.IsNil() {
+		return math.NewInt(1_000_000)
+	}
+	return f.tokens
+}
 
 // --- mock staking keeper --------------------------------------------------
 
 type mockStakingKeeper struct {
 	validators  []stakingtypes.ValidatorI
 	totalBonded math.Int // stake-linked term of the security budget; nil => zero
+	// gone lists operators the bonded iteration yields but Validator does not
+	// find: the not-found case of S10 R3.
+	gone map[string]bool
+	// getErr, when non-nil, makes Validator fail with an error that does not
+	// mean not-found, which must abort the epoch.
+	getErr error
+	// getErrFor, when set, limits getErr to that operator, so the payout loop
+	// can fail after an earlier validator was already paid.
+	getErrFor string
+}
+
+// Validator answers the payout leg's lookup the way x/staking does: the
+// stored validator, or a zero Validator with ErrNoValidatorFound.
+func (m mockStakingKeeper) Validator(_ context.Context, addr sdk.ValAddress) (stakingtypes.ValidatorI, error) {
+	if m.getErr != nil && (m.getErrFor == "" || m.getErrFor == addr.String()) {
+		return nil, m.getErr
+	}
+	if !m.gone[addr.String()] {
+		for _, v := range m.validators {
+			if v.GetOperator() == addr.String() {
+				return v, nil
+			}
+		}
+	}
+	return stakingtypes.Validator{}, stakingtypes.ErrNoValidatorFound
 }
 
 func (m mockStakingKeeper) TotalBondedTokens(_ context.Context) (math.Int, error) {
@@ -51,6 +87,8 @@ func (m mockStakingKeeper) TotalBondedTokens(_ context.Context) (math.Int, error
 	}
 	return m.totalBonded, nil
 }
+
+func (m mockStakingKeeper) PowerReduction(context.Context) math.Int { return sdk.DefaultPowerReduction }
 
 func (m mockStakingKeeper) IterateBondedValidatorsByPower(_ context.Context, fn func(index int64, validator stakingtypes.ValidatorI) (stop bool)) error {
 	for i, v := range m.validators {
@@ -79,7 +117,36 @@ type mockBankKeeper struct {
 	sends   []sendRecord
 	supply  math.Int // current nscn supply the cap check reads; zero value => zero supply
 	mintErr error    // when non-nil, MintCoins fails (records nothing) — exercises the abort branch
-	sendErr error    // when non-nil, SendCoinsFromModuleToAccount fails — exercises the abort branch
+	sendErr error    // when non-nil, SendCoinsFromModuleToModule fails — exercises the abort branch
+	// modules holds module-account nscn balances: a mint credits the minting
+	// module, a send moves the amount between modules. It is what lets a test
+	// read "rewards module balance before minus after" (S10 R4).
+	modules map[string]math.Int
+	// ledger, when set, is a store each mint and send also writes a marker
+	// into, keyed by the module. Unlike the slices above it lives in the
+	// context's multistore, so a test can see whether a mint or a send
+	// survived a discarded cache context.
+	ledger storetypes.StoreKey
+}
+
+// sendMarker is the ledger key a send to module writes.
+func sendMarker(module string) []byte { return []byte("test/sent-to/" + module) }
+
+// mintMarker is the ledger key a mint into module writes.
+func mintMarker(module string) []byte { return []byte("test/minted-to/" + module) }
+
+func (m *mockBankKeeper) moduleBalance(name string) math.Int {
+	if v, ok := m.modules[name]; ok {
+		return v
+	}
+	return math.ZeroInt()
+}
+
+func (m *mockBankKeeper) credit(name string, amt math.Int) {
+	if m.modules == nil {
+		m.modules = map[string]math.Int{}
+	}
+	m.modules[name] = m.moduleBalance(name).Add(amt)
 }
 
 // GetBalance answers the fee-collector read. The fixtures drive the offset
@@ -96,15 +163,19 @@ func (m *mockBankKeeper) GetSupply(_ context.Context, denom string) sdk.Coin {
 }
 
 type sendRecord struct {
-	recipient sdk.AccAddress
-	amt       sdk.Coins
+	from, to string // module names
+	amt      sdk.Coins
 }
 
-func (m *mockBankKeeper) MintCoins(_ context.Context, _ string, amt sdk.Coins) error {
+func (m *mockBankKeeper) MintCoins(ctx context.Context, module string, amt sdk.Coins) error {
 	if m.mintErr != nil {
 		return m.mintErr
 	}
+	if m.ledger != nil {
+		sdk.UnwrapSDKContext(ctx).KVStore(m.ledger).Set(mintMarker(module), []byte(amt.String()))
+	}
 	m.minted = append(m.minted, amt)
+	m.credit(module, amt.AmountOf(types.RewardDenom))
 	// Minting raises supply, which shrinks the cap headroom for the next epoch.
 	// Modelling that is what makes the 21M ceiling testable across epochs.
 	if m.supply.IsNil() {
@@ -114,11 +185,40 @@ func (m *mockBankKeeper) MintCoins(_ context.Context, _ string, amt sdk.Coins) e
 	return nil
 }
 
-func (m *mockBankKeeper) SendCoinsFromModuleToAccount(_ context.Context, _ string, recipient sdk.AccAddress, amt sdk.Coins) error {
+func (m *mockBankKeeper) SendCoinsFromModuleToModule(ctx context.Context, from, to string, amt sdk.Coins) error {
 	if m.sendErr != nil {
 		return m.sendErr
 	}
-	m.sends = append(m.sends, sendRecord{recipient: recipient, amt: amt})
+	n := amt.AmountOf(types.RewardDenom)
+	if m.moduleBalance(from).LT(n) {
+		return fmt.Errorf("mock bank: module %s holds %s, cannot send %s", from, m.moduleBalance(from), n)
+	}
+	m.sends = append(m.sends, sendRecord{from: from, to: to, amt: amt})
+	m.credit(from, n.Neg())
+	m.credit(to, n)
+	if m.ledger != nil {
+		sdk.UnwrapSDKContext(ctx).KVStore(m.ledger).Set(sendMarker(to), []byte(amt.String()))
+	}
+	return nil
+}
+
+// --- mock distribution keeper (records allocations) -----------------------
+
+type allocRecord struct {
+	val    stakingtypes.ValidatorI
+	tokens sdk.DecCoins
+}
+
+type mockDistributionKeeper struct {
+	allocs   []allocRecord
+	allocErr error // when non-nil, AllocateTokensToValidator fails — exercises the abort branch
+}
+
+func (m *mockDistributionKeeper) AllocateTokensToValidator(_ context.Context, val stakingtypes.ValidatorI, tokens sdk.DecCoins) error {
+	if m.allocErr != nil {
+		return m.allocErr
+	}
+	m.allocs = append(m.allocs, allocRecord{val: val, tokens: tokens})
 	return nil
 }
 
@@ -128,6 +228,28 @@ type mockParticipationKeeper struct {
 	ep          map[string]math.Int // valoper string -> accumulated EP; absent key => not found
 	epochLen    uint64              // epoch length returned by EpochLengthBlocks
 	epochLenErr error               // when non-nil, EpochLengthBlocks fails
+	warps       map[string]math.LegacyDec
+	lastEpochs  map[string]uint64              // a WARP row's last_epoch; absent => 1 (measured)
+	warpParams  *participationtypes.WarpParams // nil => the participation defaults
+}
+
+func (m mockParticipationKeeper) GetWarp(_ context.Context, addr sdk.ValAddress) (participationtypes.WarpState, bool, error) {
+	v, ok := m.warps[addr.String()]
+	if !ok {
+		return participationtypes.WarpState{}, false, nil
+	}
+	last, set := m.lastEpochs[addr.String()]
+	if !set {
+		last = 1
+	}
+	return participationtypes.WarpState{ValidatorAddress: addr.String(), Value: v, LastEpoch: last}, true, nil
+}
+
+func (m mockParticipationKeeper) WarpParams(context.Context) (participationtypes.WarpParams, error) {
+	if m.warpParams != nil {
+		return *m.warpParams, nil
+	}
+	return participationtypes.DefaultParams().Warp(), nil
 }
 
 func (m mockParticipationKeeper) EpochLengthBlocks(_ context.Context) (uint64, error) {
@@ -176,9 +298,11 @@ func (m mockComplianceKeeper) GetCompliance(_ context.Context, addr sdk.ValAddre
 // --- emission fixture -----------------------------------------------------
 
 type emissionFixture struct {
-	ctx    context.Context
-	keeper keeper.Keeper
-	bank   *mockBankKeeper
+	ctx      context.Context
+	keeper   keeper.Keeper
+	bank     *mockBankKeeper
+	distr    *mockDistributionKeeper
+	storeKey storetypes.StoreKey
 }
 
 func initEmissionFixture(
@@ -201,6 +325,7 @@ func initEmissionFixture(
 	authority := authtypes.NewModuleAddress(types.GovModuleName)
 
 	bank := &mockBankKeeper{supply: testSupply}
+	distr := &mockDistributionKeeper{}
 
 	k := keeper.NewKeeper(
 		storeService,
@@ -213,6 +338,8 @@ func initEmissionFixture(
 		pk,
 		vr,
 		cp,
+		nil, // stakeengineKeeper: emission never reads it
+		distr,
 	)
 
 	// Normalise the year so the budget divides exactly into the fixture's
@@ -222,7 +349,7 @@ func initEmissionFixture(
 	params.BlocksPerYear = 100_000
 	require.NoError(t, k.Params.Set(ctx, params))
 
-	return &emissionFixture{ctx: ctx, keeper: k, bank: bank}
+	return &emissionFixture{ctx: ctx, keeper: k, bank: bank, distr: distr, storeKey: storeKey}
 }
 
 // The emission fixtures use numbers chosen so the security budget divides
@@ -267,9 +394,15 @@ func TestDistributeEpochRewards_Eligible(t *testing.T) {
 	expected := sdk.NewCoins(sdk.NewCoin(types.RewardDenom, testPool))
 	require.Len(t, f.bank.minted, 1)
 	require.True(t, f.bank.minted[0].Equal(expected))
+	// The share goes to x/distribution, booked against this validator — never
+	// to the operator account (S10 R1).
 	require.Len(t, f.bank.sends, 1)
-	require.Equal(t, sdk.AccAddress(va.Bytes()), f.bank.sends[0].recipient)
+	require.Equal(t, types.ModuleName, f.bank.sends[0].from)
+	require.Equal(t, distrtypes.ModuleName, f.bank.sends[0].to)
 	require.True(t, f.bank.sends[0].amt.Equal(expected))
+	require.Len(t, f.distr.allocs, 1)
+	require.Equal(t, va.String(), f.distr.allocs[0].val.GetOperator())
+	require.True(t, f.distr.allocs[0].tokens.Equal(sdk.NewDecCoinsFromCoins(expected...)))
 
 	snap, found, err := f.keeper.GetRewardSnapshot(f.ctx, testEpoch, va)
 	require.NoError(t, err)
@@ -307,7 +440,7 @@ func TestDistributeEpochRewards_MintFailureAborts(t *testing.T) {
 	}
 }
 
-// SendCoinsFromModuleToAccount failure aborts the epoch the same way.
+// A failed transfer to x/distribution aborts the epoch the same way.
 func TestDistributeEpochRewards_SendFailureAborts(t *testing.T) {
 	va := valAddr(21) // fully eligible -> reaches the send after a successful mint
 	sk := mockStakingKeeper{totalBonded: testBonded, validators: []stakingtypes.ValidatorI{fakeValidator{operator: va.String()}}}
@@ -500,7 +633,8 @@ func TestDistributeEpochRewards_MultipleValidators(t *testing.T) {
 	// exactly one mint (good).
 	require.Len(t, f.bank.minted, 1)
 	require.Len(t, f.bank.sends, 1)
-	require.Equal(t, sdk.AccAddress(good.Bytes()), f.bank.sends[0].recipient)
+	require.Len(t, f.distr.allocs, 1)
+	require.Equal(t, good.String(), f.distr.allocs[0].val.GetOperator())
 
 	goodSnap, _, _ := f.keeper.GetRewardSnapshot(f.ctx, testEpoch, good)
 	require.True(t, goodSnap.Eligible)

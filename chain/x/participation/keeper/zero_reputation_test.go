@@ -102,9 +102,11 @@ func TestZeroReputation_LeavesClosedEpochsAlone(t *testing.T) {
 	require.Equal(t, uint64(100), got.BlocksSigned)
 }
 
-// A validator with no snapshot for the in-flight epoch is a no-op: punishment
-// runs inside a slashing hook and must never fail or halt the chain.
-func TestZeroReputation_NoSnapshotIsANoop(t *testing.T) {
+// A validator with no snapshot for the in-flight epoch gets no snapshot
+// invented for it, and the call still succeeds: punishment runs inside a
+// slashing hook and must never fail or halt the chain. (Its WARP is zeroed all
+// the same; see warp_test.go.)
+func TestZeroReputation_NoSnapshotInventsNone(t *testing.T) {
 	f, val := zeroRepFixture(t)
 	require.NoError(t, f.keeper.ZeroReputation(f.ctx, val, 9))
 

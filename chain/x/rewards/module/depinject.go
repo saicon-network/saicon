@@ -8,12 +8,14 @@ import (
 	"cosmossdk.io/depinject/appconfig"
 	"github.com/cosmos/cosmos-sdk/codec"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	distrkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
 
 	compliancekeeper "github.com/saicon-network/saicon/chain/x/compliance/keeper"
 	participationkeeper "github.com/saicon-network/saicon/chain/x/participation/keeper"
 	"github.com/saicon-network/saicon/chain/x/rewards/keeper"
 	"github.com/saicon-network/saicon/chain/x/rewards/types"
+	stakeenginekeeper "github.com/saicon-network/saicon/chain/x/stakeengine/keeper"
 	validatorregistrykeeper "github.com/saicon-network/saicon/chain/x/validatorregistry/keeper"
 )
 
@@ -48,6 +50,13 @@ type ModuleInputs struct {
 	ParticipationKeeper     participationkeeper.Keeper
 	ValidatorregistryKeeper validatorregistrykeeper.Keeper
 	ComplianceKeeper        compliancekeeper.Keeper
+	// StakeengineKeeper gives the voting-power preview its validator cap. No
+	// cycle: x/stakeengine depends on x/rewards' types only, never its keeper.
+	StakeengineKeeper stakeenginekeeper.Keeper
+	// DistrKeeper books each validator's epoch reward: commission to the
+	// operator, the rest to its delegators (ADR-0011 F3, S10 R1). No cycle:
+	// x/distribution takes the auth, bank and staking keepers, never this one.
+	DistrKeeper distrkeeper.Keeper
 }
 
 type ModuleOutputs struct {
@@ -74,6 +83,8 @@ func ProvideModule(in ModuleInputs) ModuleOutputs {
 		in.ParticipationKeeper,
 		in.ValidatorregistryKeeper,
 		in.ComplianceKeeper,
+		in.StakeengineKeeper,
+		in.DistrKeeper,
 	)
 	m := NewAppModule(in.Cdc, k, in.AuthKeeper, in.BankKeeper)
 

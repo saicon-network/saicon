@@ -10,6 +10,11 @@ Update (S8, October 2026): the randomness source **B11 was chosen on 2026-07-28 
 per-validator VRF) and is implemented in shadow mode (S8, v0.10.0)**; it is not accepted for seats
 until audited (Q1'27), and the ADR as a whole stays *Proposed*. What was built, where it departs
 from the construction below and what it leaves open: "Implementation (S8, October 2026)".
+Update (S10, November 2026, v0.11.0): WARP is measured on-chain each epoch (ADR-0009,
+*Implementation (S10)*); §1's VP is published by a read-only query, `voting_power_preview`, beside
+the stake-weighted power consensus uses; and the PoP reward share is paid through x/distribution,
+so it reaches delegators. Consensus power is not written and rewards are not ∝ VP: "Implementation
+(S10, November 2026): the preview" and *Implementation status* below.
 Origin: Register v1.0 (2026-07-24, adopted wholesale by project decision) + the code-review
 finding that opened B11 (DEVELOPMENT.md:310–312, 377).
 Related: [ADR-0004](ADR-0004-validator-activation-model.md) (activation), ADR-0009 (PS + WARP —
@@ -54,6 +59,11 @@ VP = min(bondedStake, validatorCap) · WARP/100 · complianceFlag        (C ∈ 
 - VP is **normalized** across the selected active set and written as the ABCI
   `ValidatorUpdate` power.
 - **Rewards ∝ final VP** — the same scalar. **No tiers, no second KPI multiplier.**
+- The two bullets above are the **decision**, applied together with the selection layer (§3).
+  They are not what the chain runs: since S10 the formula is computed only as a read-only
+  preview, consensus power is stock x/staking's, and rewards are an equal split among the
+  validators that pass the gate below (*Implementation (S10, November 2026): the preview*, and
+  *Where the code contradicts the Register*).
 - The EP gate stays underneath: only `ACTIVE ∧ C=1 ∧ EP>0` receives anything (invariant V-2,
   DEVELOPMENT.md:259).
 - Pool membership additionally requires `WARP ≥ 65` (DEVELOPMENT.md:247); `WARP` starts at 80
@@ -417,7 +427,7 @@ must not collide with the rounding rule and minimum power floor that are still u
 (Consequences below).
 
 **Re-exported, with owners named.** Freezing new delegations to over-threshold validators and
-routing them elsewhere is **ADR-0005 (delegation router — not yet written)**. Widening the
+routing them elsewhere is **ADR-0005 (delegation router, implemented in S7)**. Widening the
 denominator by admitting reserve candidates is **B6**. The measurement and trigger policy ADR-0012
 lists — Top-10 share of VP or of bonded stake, instantaneous or rolling, who acts, release
 condition and hysteresis, precedence against the D2 queue — is cap-layer policy and stays with
@@ -427,11 +437,77 @@ condition and hysteresis, precedence against the D2 queue — is cap-layer polic
 it does not discharge B5, whose acceptance criterion remains DEVELOPMENT.md:371 — after a 30%
 delegation exit, Top-10 VP ≤ 35% with caps still consistent.
 
+## Implementation (S10, November 2026): the preview
+
+§1's formula is computed from S10 — as a **read-only preview**, not as consensus power.
+`GET /saicon/chain/rewards/v1/voting_power_preview` (CLI `saicond q rewards voting-power-preview`)
+answers, for every validator in x/staking's bonded set, the VP §1 would give it from the state at
+the queried height, beside the power CometBFT gives it today. It writes nothing, nothing reads it,
+and no `ValidatorUpdate` is produced: the validator set and its powers are still stock x/staking's.
+The rulings, from the same delegated decision as ADR-0009's
+(the design notes):
+
+- **R10 — Inputs.** `bonded` = the validator's bonded tokens; `cap` = x/stakeengine's current
+  `validator_cap` (ADR-0012) — x/rewards gains a dependency on x/stakeengine for that one read;
+  `warp` = the stored WARP row (ADR-0009, *Implementation (S10)*), or `warp_initial` for a
+  validator with no row. `warp_measured` = a row exists **and** its `last_epoch` > 0, i.e. the
+  value comes from a scored epoch. A validator punished before its first scored epoch has
+  ADR-0009 R7's zero row (`last_epoch` 0): it is shown at its stored 0, not at `warp_initial`,
+  with `warp_measured = false`, since a punishment is not a measurement. `C` = the compliance
+  flag, read from x/compliance's record exactly as the reward gate reads it (no record =
+  compliant). The spec named the flag x/validatorregistry keeps; it was amended on 2026-11-24 to
+  match, because the registry's copy is best-effort and can lag (V-4.1 is not implemented), and a
+  preview that disagreed with the payout gate about who is compliant would mislead its reader.
+  The WARP params must pass `WarpParams.Validate`, the gate the epoch step uses too; otherwise
+  the query answers `FailedPrecondition` rather than show a WARP that is not moving.
+- **R11 — Formula.** `vp = floor( min(bonded, cap) · warp/100 · C )` in nscn, on integers, so the
+  floor is exact. `eligible = registry ACTIVE ∧ C = 1 ∧ EP > 0 ∧ warp ≥ warp_threshold`: the
+  first three are the reward gate itself — the preview calls the same function the payout does,
+  `rewardGate` in `chain/x/rewards/keeper/emission.go`, so the two cannot disagree on who passes
+  them — and WARP is the one condition the preview adds. (The first S10 build left `EP > 0` out,
+  so an EP 0 validator showed eligible while the payout denied it; fixed before v0.11.0.)
+  `vp_share = vp / total_vp`, where `total_vp` is the sum over eligible validators, as a 6-decimal
+  string, truncated. An ineligible validator shows its `vp`, a `vp_share` of `"0"` and the first
+  reason that applies, in the reward gate's order: `not active`, `non-compliant`, `EP=0`, then
+  `warp below threshold`. `stock_share` is its CometBFT power (tokens / `PowerReduction`, as
+  x/staking computes it) over the bonded set's total, same format. Validators are ordered by `vp`
+  descending, ties by `operator_address` ascending as a string, as the spec says and as a reader
+  sees it. (Byte order would disagree: bech32's alphabet is not in ASCII order. Ties are common,
+  since every non-compliant validator has `vp` 0.)
+- **R12 — Not in the preview:** entity caps (the selection layer applies them with the 53 + 22
+  seats), seat selection, the lottery, and the normalization to CometBFT power units. None of the
+  three quantities named under *Where the code contradicts the Register* — normalization scale,
+  rounding rule, minimum power floor — is decided by S10.
+
+The response: `{ height, epoch, params { warp_threshold, warp_initial, validator_cap },
+validators [ { operator_address, bonded, capped_bonded, warp, warp_measured, compliant, status,
+vp, vp_share, stock_power, stock_share, eligible, reason } ], total_vp, total_stock_power }`, where
+`epoch` is the last closed epoch, `height / epoch_length`, the one whose WARP the preview reads.
+
+What it is for: seeing on DevNet how VP would redistribute power, before the selection layer
+exists to act on it. What stays unbuilt: §1's normalization and `ValidatorUpdate` writing, §3's
+selection, and seats from the B11 draw (shadow mode since S8).
+
 ## Consequences
 
-### Implementation status: none of this exists
+### Implementation status
 
-Verified in this repository on branch `main` at the time of writing.
+What exists as of S10 (v0.11.0):
+
+- **WARP** is stored per validator and updated each epoch (ADR-0009, *Implementation (S10)*).
+- **The VP query and its response type exist:** `Query/VotingPowerPreview`
+  (`chain/x/rewards/keeper/voting_power_preview.go`, `QueryVotingPowerPreviewResponse` in
+  `chain/proto/chain/rewards/v1/query.proto`), computed on request from the state at the queried
+  height (*Implementation (S10): the preview*, above).
+- **There is no stored VP and no consensus write.** No VP state is kept, no module returns a
+  `ValidatorUpdate`, and consensus weight is produced solely by stock x/staking. Selection,
+  normalization and the lottery's use of the B11 draw are unbuilt; the bullets below on them
+  still hold.
+- **ADR-0012** (caps, `x/stakeengine`) and **ADR-0014** (entity registry) are written and
+  implemented in the parts this ADR's pseudocode calls (`validator_cap`, the entity record).
+
+The bullets below were verified in this repository on branch `main` when this ADR was written
+(July 2026); each says where S10 changed it.
 
 - **No voting-power computation, no selection layer, no lottery.** grep over `chain/x`,
   `chain/app`, `chain/proto` for `voting_power` / `ValidatorUpdate` / `lottery` / `active_set` /
@@ -439,6 +515,7 @@ Verified in this repository on branch `main` at the time of writing.
   implementation: a comment at `chain/x/validatorregistry/keeper/hooks.go:31` explaining why a
   hook error must not propagate into staking's `BlockValidatorUpdates`, and a stock staking store
   key listed in `chain/app/sim_test.go:249`. There is no VP type, no VP state, no VP query.
+  *(True when written; since S10 there is a VP query and its response type, still no VP state.)*
 - **No SAiCoN module is even able to change the validator set.** All four modules declare
   `appmodule.HasEndBlocker` (e.g. `chain/x/participation/module/module.go:29`, EndBlock at
   `:177`), whose `EndBlock` returns only `error`; none implements the ABCI variant returning
@@ -452,12 +529,13 @@ Verified in this repository on branch `main` at the time of writing.
   `epoch_length_blocks` and `ep_decay` (`chain/proto/chain/participation/v1/params.proto:15–20`);
   the per-epoch snapshot carries `uptime_fraction` and `computed_score`
   (`chain/proto/chain/participation/v1/types.proto:19–28`). There is no smoothed reputation
-  state anywhere. **ADR-0009 is a hard prerequisite for this ADR's formula.**
+  state anywhere. **ADR-0009 is a hard prerequisite for this ADR's formula.** *(True when
+  written; since S10 the WARP params and state exist in x/participation.)*
 - **No caps and no entity registry**, so both `min(bonded, validatorCap)` and
   `applyEntityCaps(pool)` have nothing to call — there is no stake check at registration at all
-  (DEVELOPMENT.md:62). **ADR-0012 and ADR-0014 are hard prerequisites for the pseudocode** — and
-  ADR-0014 is **not yet written** (`chain/docs/adr/` holds 0001–0004, 0006–0012 only), so the
-  prerequisite chain is open at its far end.
+  (DEVELOPMENT.md:62). **ADR-0012 and ADR-0014 are hard prerequisites for the pseudocode.**
+  *(True when written; both ADRs now exist, and x/stakeengine and x/entityregistry implement
+  the parts the pseudocode calls — the preview reads `validator_cap` from x/stakeengine.)*
 - **No randomness primitive of any kind.** grep for `vrf`, `drand`, `commit-reveal`,
   `randomness` over `chain/x`, `chain/app`, `chain/proto` returns nothing. *(True when written;
   since S8, v0.10.0, the grep finds `x/randomness` and the key fields of `x/entityregistry`.)*
@@ -465,15 +543,21 @@ Verified in this repository on branch `main` at the time of writing.
 ### Where the code contradicts the Register
 
 - **Rewards are flat, not ∝ VP.** The Register: *"Rewards ∝ final VP — no tiers, no second KPI
-  multiplier"* (DEVELOPMENT.md:114). The chain mints an **identical flat amount** to every
-  eligible validator — `rewardAmt := math.NewIntFromUint64(params.RewardPerEpochAmount)` at
-  `chain/x/rewards/keeper/emission.go:98`, documented at `:76` and in
-  `chain/proto/chain/rewards/v1/params.proto:19–22`. Stake, WARP and quality have **zero**
-  influence on reward size today. This is not merely "not built yet": the shipped behaviour is a
-  *different economic policy* — equal pay per active validator — running on devnet now. Debt
-  owned jointly by this ADR (the VP scalar) and ADR-0011 (the pool).
-- **The reward-eligible population is already the stock stake-weighted set.**
-  `chain/x/rewards/keeper/emission.go:101` iterates `IterateBondedValidatorsByPower`, i.e. exactly
+  multiplier"* (DEVELOPMENT.md:114). The chain splits each epoch's pool **equally** among the
+  validators that pass the gate: `DistributeEpochRewards` in
+  `chain/x/rewards/keeper/emission.go` divides the pool by the number of eligible validators
+  (`pool.QuoRaw(len(eligible))`), the eligible set coming from `classify` through `rewardGate`
+  (`ACTIVE ∧ C=1 ∧ EP>0`). Since S10 (v0.11.0) each share is paid through x/distribution by
+  `payThroughDistribution` (`AllocateTokensToValidator`), so the validator's commission goes to its
+  operator and the rest to its delegators by stake, claimed with the stock withdrawal messages
+  (ADR-0011 F3). The pool is sized by ADR-0011's security budget, no longer by a flat
+  `reward_per_epoch_amount`. Stake therefore shapes how a validator's share is divided among its
+  delegators, but stake, WARP and quality have **zero** influence on the size of that share. This
+  is not merely "not built yet": the shipped behaviour is a *different economic policy* — equal
+  pay per eligible validator — running on devnet now. Debt owned jointly by this ADR (the VP
+  scalar) and ADR-0011 (the pool).
+- **The reward-eligible population is already the stock stake-weighted set.** `classify` in
+  `chain/x/rewards/keeper/emission.go` iterates `IterateBondedValidatorsByPower`, i.e. exactly
   the set this ADR proposes to replace. Introducing selection changes the iteration source, not
   just the amounts.
 - **Active-set size is the SDK default, not 60.** Nothing in the repo sets `MaxValidators` to 60.
@@ -568,12 +652,13 @@ material.
 - [ADR-0004](ADR-0004-validator-activation-model.md) — activation is staking-hook driven; this
   ADR changes who holds a *seat*, not who is *registered*.
 - ADR-0009 (PS + WARP engine), ADR-0012 (caps / `x/stakeengine`), ADR-0014 (entity registry,
-  attestation, appeal — **not yet written**) — all three are prerequisites, not siblings.
-- ADR-0005 (delegation router — **not yet written**) — owns the delegation-freeze half of the B5
+  attestation, appeal) — all three are prerequisites, not siblings.
+- ADR-0005 (delegation router) — owns the delegation-freeze half of the B5
   hand-off re-exported above.
 - ADR-0011 (emission) — owns the reward pool that VP divides.
 - Code, branch `main`: `chain/app/app_config.go:202` and `:135–141`, `chain/app/config.go:8`,
-  `chain/x/rewards/keeper/emission.go:76,98,101`,
+  `chain/x/rewards/keeper/emission.go` (`DistributeEpochRewards`, `classify`, `rewardGate`,
+  `payThroughDistribution`), `chain/x/rewards/keeper/voting_power_preview.go`,
   `chain/x/participation/module/module.go:29,177`,
   `chain/proto/chain/participation/v1/params.proto:15–20`,
   `chain/proto/chain/participation/v1/types.proto:19–28`,

@@ -171,7 +171,10 @@ prerequisite for this ADR being livable rather than merely strict.
 **Tier 2 is the tier that needs work.** Four parameters are bounded today. Cap percentages, the
 commission range and the PS weights are all named as bounded in the Register and none of them
 exists as a parameter yet — they arrive with `x/stakeengine` (ADR-0012) and the WARP engine
-(ADR-0009). Each must land with its bound, not after it.
+(ADR-0009). Each must land with its bound, not after it. *2026-11-24 (S10):* the four WARP
+parameters landed with theirs, enforced in `Params.Validate` on every `MsgUpdateParams`:
+`0 < warp_rise < warp_fall ≤ 1` and `0 ≤ warp_threshold ≤ warp_initial ≤ 100`. The PS weights
+did not land: PS is still single-signal.
 
 **A published tier table is an attack surface map.** Anyone can now read which values a
 majority could move and which it could not. That is deliberate: a governance system whose

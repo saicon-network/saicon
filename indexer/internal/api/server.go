@@ -30,6 +30,7 @@ func New(s *store.Store, chainID string, tip func(context.Context) (int64, error
 	mux.HandleFunc("GET /v1/concentration", srv.concentration)
 	mux.HandleFunc("GET /v1/concentration/epochs", srv.concentrationEpochs)
 	mux.HandleFunc("GET /v1/entities", srv.entities)
+	mux.HandleFunc("GET /v1/proposers", srv.proposers)
 	return mux
 }
 
@@ -78,13 +79,21 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
+// scoreboard serves every validator with, beside them, what the page needs to
+// read the preview column: the epoch it comes from, the code of the newest
+// epoch when that one has no preview, and the WARP threshold the preview used.
 func (s *server) scoreboard(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.s.Scoreboard(r.Context(), s.chainID)
+	b, err := s.s.Board(r.Context(), s.chainID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"validators": rows})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"validators":          b.Rows,
+		"preview_epoch":       b.Head.Epoch,
+		"preview_unavailable": b.Head.Unavailable,
+		"preview_threshold":   b.Head.Threshold,
+	})
 }
 
 func (s *server) validator(w http.ResponseWriter, r *http.Request) {

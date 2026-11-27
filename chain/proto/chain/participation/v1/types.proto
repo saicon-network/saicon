@@ -30,6 +30,29 @@ message ParticipationScoreSnapshot {
     (gogoproto.stdtime) = true,
     (gogoproto.nullable) = false
   ];
+  // warp is the validator's WARP after this epoch's update (ADR-0009 §2), on
+  // 0-100. A snapshot written before the WARP engine has none: absent means
+  // unknown, never zero, which is why the field is nullable.
+  string warp = 9 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = true
+  ];
+}
+
+// WarpState is a validator's WARP reputation (ADR-0009 §2): an asymmetric
+// smoother of the Participation Score that falls fast and recovers slowly.
+message WarpState {
+  string validator_address = 1 [(gogoproto.customname) = "ValidatorAddress"];
+  // value is on 0-100.
+  string value = 2 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // last_epoch is the epoch whose Participation Score last moved value. It is 0
+  // only on a row punishment wrote before any epoch had scored the validator.
+  uint64 last_epoch = 3;
 }
 
 // EmpiricalPointsState is the accumulated EP for a validator. EP gates rewards

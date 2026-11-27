@@ -48,12 +48,13 @@ If the proposal history matters, point it at a node that retains from genesis.
 
 | Path | Returns |
 |---|---|
-| `GET /v1/scoreboard` | every validator, ordered by score |
-| `GET /v1/validators/{operator}` | one validator |
-| `GET /v1/validators/{operator}/epochs?from=&to=` | that validator's epoch series |
+| `GET /v1/scoreboard` | every validator, ordered by score, with its WARP and its row of the newest available voting-power preview; `preview_epoch`, `preview_unavailable` and `preview_threshold` beside the list (see [WARP and the voting-power preview](#warp-and-the-voting-power-preview)) |
+| `GET /v1/validators/{operator}` | one validator, the same row |
+| `GET /v1/validators/{operator}/epochs?from=&to=` | that validator's epoch series, with `warp` and `preview_threshold` per epoch |
 | `GET /v1/concentration?epoch=` | the newest epoch whose power was read (or the given one): top-10, Nakamoto, the validators with their units, the two concentration curves |
 | `GET /v1/concentration/epochs?from=&to=` | the per-epoch measurements, oldest first, at most 1000, unavailable epochs included with their codes |
 | `GET /v1/entities?epoch=` | the entity view of the newest epoch with both parts read (or the given one): every attested entity, its members, and the charged frozen seats of revoked ones |
+| `GET /v1/proposers?epochs=&from=&to=` | per closed epoch and over a window, each validator's share of the blocks it proposed beside its share of voting power; oldest first, at most 200 epochs, newest 20 when no parameter is given, plus the aggregated window; unavailable epochs included with their codes |
 | `GET /v1/status` | `chain_id`, `indexed_height`, `tip_height`, `lag_blocks` |
 
 Amounts are strings in base units (`nscn`); convert once, at display. A field the
@@ -200,6 +201,181 @@ detail rows — per-validator powers, entity rows and seats — are kept for the
 epochs; a row older than that serves its measurements and no validators or curve. On a
 fresh database against a long-running chain the backfill can only measure what the node
 still holds: app state for the pruning window, validator sets for longer.
+
+## Proposer frequency
+
+CometBFT picks each block's proposer by weighted round-robin over voting power, so over an
+epoch a validator's share of proposed blocks follows its share of voting power, and when its
+voting power falls its share of blocks falls with it. The endpoint serves both shares per
+closed epoch, and aggregated over a window, so that fall is visible as a lower proposed share
+over time. It reads stored data only: the proposals the follower counted and the validator set
+the concentration pass stored. It makes no chain read.
+
+`GET /v1/proposers` takes `epochs=N` (the newest N closed epochs inside the range, N from 1 to
+200, more is clamped to 200), `from` and `to` (epoch numbers). With `epochs`, or with none of
+the three, it returns the newest N (20 by default); with only `from` and/or `to` it returns the
+oldest epochs of the range, at most 200. A malformed value (not an unsigned integer, `epochs=0`)
+answers 400 with a JSON error, like `?epoch=` elsewhere. The epochs are oldest first and only
+epochs with a concentration row appear. The cap is 200 because every epoch carries the whole
+validator set: 200 epochs of 75 validators is a few MB; the service does not compress responses.
+
+The answer is `{"epochs": [...], "window": {...}}`.
+
+**Per epoch**: `epoch`, `height` (its last block), `epoch_length`, `blocks` (proposals counted in
+the epoch), `total_power` (`T`, a string), `unavailable` and `validators`. Per validator:
+`operator`, `cons_addr`, `moniker` (`null` if unknown), `proposed` (count), `power` (string) and:
+
+- `proposed_share = proposed / blocks` and `power_share = power / T`: 6-decimal strings,
+  truncated, never rounded.
+- `expected = power_share × blocks = power · blocks / T`, truncated to 2 decimals.
+
+There is no per-epoch ratio. At the default epoch length of 100 blocks and a 75-seat set a
+validator expects about 1.3 blocks per epoch, so a single epoch's proposed/expected is rounding
+noise (0.75 or 1.5 for an honest validator).
+
+**Window**: the aggregate over the comparable epochs among the answer's epoch rows (the newest
+20 by default; `epochs` of them are comparable, from the first
+`from` to the last `to`, `blocks` in all), computed in big integers and rationals. It is
+aggregated server-side, from the per-epoch rows the same answer carries. Per validator:
+
+- `proposed_share = Σ proposed / Σ blocks`, over every comparable epoch.
+- `power_share`: the mean over every comparable epoch of its `power_share`, an epoch in which it
+  was not in the set at the last block counting as 0. Same epochs and denominator as the
+  proposed share, so the two are comparable.
+- `ratio = Σ proposed / Σ expected`, truncated to 3 decimals, over the epochs it was in the set
+  at the last block (`in_set_epochs` of them), `null` for none. This is a check that proposer
+  selection followed voting power: near 1 whatever happens to the power itself, because the
+  power it is measured against is the one proposers are picked by. It falls below 1 when a
+  validator misses its proposal rounds (offline, jailed). It is not a measure of how power moves;
+  the shares are.
+- `operator` and `moniker` are the newest known for the consensus address.
+
+Validators are ordered by `power_share` descending. A window with no comparable epoch is
+`{"from": null, "to": null, "epochs": 0, "blocks": 0, "validators": []}`.
+
+**Identity.** A validator is identified by `cons_addr`. Its `operator` is the operator address
+the newest epoch of the answer that resolved it carries, applied to every epoch of the answer;
+`cons:<ADDR>` is used when no epoch of the answer resolved it: when x/staking has no validator for
+the key, when its state at the epoch's height was pruned, and for a validator the answer sees only
+as a departed proposer (it proposed, but is in the set at the last block of none of the epochs).
+
+**Which snapshot.** An epoch `e` covers heights `(e-1)·L+1 … e·L`, and the power is the set at
+`H = e·L`, the one stored snapshot of that epoch (`L` is recovered as `height / epoch`). The
+proposals of the epoch were made by the set as it stood through the epoch, which equals the set at
+`H` unless the set changed inside it. Where it did (a validator's power halving mid-epoch), the
+epoch's expected figure is measured against the end-of-epoch power, so a single epoch's comparison
+is off by up to the size of the change; the window means smooth it, and a change made at an epoch
+close is in force for nearly all of the next epoch and is measured by it. A validator that proposed
+in the epoch but is not in the set at `H` is listed after the set with its `proposed` and
+`proposed_share` and `null` for `power`, `power_share` and `expected` in that epoch's row: its
+blocks are counted, its power at `H` is not a measured fact. In the window it is outside the set at
+that last block, which counts as holding no power (0) in its mean `power_share`; its blocks stay in
+`proposed_share` and leave the `ratio`, which covers only the epochs it was in the set.
+
+**Unavailable is a fact, not a row of zeros.** An epoch that cannot be compared carries
+`unavailable` with a code, and `total_power` and `validators` are `null`. `blocks` still shows
+what was counted. Such epochs are left out of the window.
+
+| Code | Meaning |
+|---|---|
+| `pruned` | the power of the epoch was not read (the concentration pass's own `pruned` code), or its per-validator detail is older than the retained window |
+| `blocks_before_history` | the follower began after the epoch's first block (a pruned node, see Retention) |
+| `blocks_not_indexed` | the follower has not walked to the epoch's last block |
+| `blocks_incomplete` | the proposals counted are not one per block of the epoch |
+| `epoch_length_unknown` | the epoch's length cannot be derived from the stored row |
+
+## WARP and the voting-power preview
+
+WARP (ADR-0009) is each validator's reputation on 0–100, stepped once per epoch from its
+participation score. The voting-power preview (x/rewards, ADR-0008 *Implementation (S10)*)
+is the voting power ADR-0008 §1 would give each bonded validator from the chain's state,
+`floor(min(bonded, validator_cap) · WARP/100 · C)`, eligible when compliant, registry-ACTIVE
+and at or above the WARP threshold. It is a preview: consensus power, and so the choice of
+proposers, comes from stake. That is why the proposer-frequency figures above are compared
+with stock voting power and not with this.
+
+**WARP.** The epoch reader takes `warp` from the participation snapshot it already reads
+for every validator (`/saicon/chain/participation/v1/snapshot/{operator}/{epoch}`) and
+stores it in `epoch_snapshots.warp` exactly as the chain wrote it, an 18-decimal string,
+never rounded. A snapshot without one leaves `NULL`: the chain writes `"warp": null` for a
+snapshot taken before its WARP engine existed, and a node that predates the field omits it.
+A value that is not a decimal string from 0 to 100 (a number, `""`, `"-1"`, `"1e2"`, `"101"`)
+is stored as `NULL` too, and the reader logs what the node sent. Rows read before this column
+existed stay `NULL`. `migrate()` adds the column to an older database; it is the one `ALTER`
+the schema allows, beside the `chains` columns.
+
+**The preview.** The epoch reader does not read the preview. When it finishes epoch `e` it
+adds the epoch to `vp_preview_due (chain_id, epoch, attempts)`, before marking the epoch
+read, unless the epoch already holds a preview. A preview pass then runs after each epoch
+pass, in the same goroutine, and reads the due epochs newest first, each pinned at
+`H = e·L` with `x-cosmos-block-height`:
+
+- `vp_preview_epochs (chain_id, epoch, height, unavailable, total_vp, threshold, cap)`: one
+  row per epoch whose read came to an end. `height` is `H`; `threshold` is
+  `params.warp_threshold` and `cap` is `params.validator_cap` (nscn) at `H`; the last three
+  are `NULL` when `unavailable` is set.
+- `vp_preview (chain_id, epoch, operator, vp, vp_share, stock_share, eligible, reason, warp, warp_measured)`:
+  one row per bonded validator of an available preview, none for an unavailable one. Every
+  value is the chain's string: `vp` in nscn, `vp_share` the chain's 6-decimal truncated share
+  of the eligible validators' total (`"0"` for an ineligible validator), `stock_share` its
+  share of stock voting power, `warp` the value the preview used (`warp_initial` for an
+  unmeasured validator). `reason` is `NULL` when eligible, else the chain's text:
+  `not active`, `non-compliant`, `EP=0` or `warp below threshold`. `operator` is written the way
+  x/staking names the validator, matched on address bytes, so the scoreboard's join finds it.
+
+Writing an epoch's outcome takes it off the due list in the same transaction. A row with a
+code never replaces a stored preview or deletes its rows: a later read can find the height
+pruned, but that does not undo the preview read before.
+
+A read ends in a code only on the node's definitive answer that there is no preview at `H`.
+Such an epoch is never read again: the preview reads the WARP parameters at `H`, so a node
+upgraded later would answer an old height with `params_invalid` at best.
+
+| Code | Meaning |
+|---|---|
+| `route_missing` | the node does not serve the route: HTTP 501, gRPC Unimplemented in the body, or the gateway's own `{"code":5,"message":"Not Found"}` for a path it has no route for |
+| `params_invalid` | gRPC FailedPrecondition: x/participation's WARP parameters at `H` do not validate |
+| `caps_missing` | gRPC NotFound from the chain: x/stakeengine had not computed its caps at `H` |
+| `pruned` | the node no longer holds height `H` |
+| `error` | the read kept failing: written only when the retries below give up. The last failure is logged, not stored |
+
+A height the node has not reached is not a failure at all: the REST node lags the one the
+follower reads and will get there, so nothing is written, no attempt is counted, and the epoch
+is asked again on the next pass, however long the lag lasts.
+
+Every other failure is transient and nothing is written: a timeout, a dropped connection, a
+5xx other than 501, a 404 without a gRPC code (a proxy's page, not the node's answer), a 200
+that does not decode or whose height or epoch is not `H` or `e`. The epoch stays due and the
+attempt is counted in `vp_preview_due.attempts`. It is read again by the concentration pass's
+re-read rule: it waits 10 passes (`rereadBackoffPasses`), and 3 failures in a row
+(`rereadMaxFailures`) end the pass. After 5 failures (`epoch.PreviewMaxAttempts`) it is stored
+as `error`. The count is in the database, so a restart keeps it; the wait between attempts is
+not, so a restart reads a waiting epoch at once. An indexer restarted five times during an
+outage of the route therefore gives that epoch up sooner than the 50 passes the rule allows.
+
+The pass shares the goroutine with the follower, so it is bounded in time: each read has
+3 s (`epoch.PreviewRequestTimeout`), a read starts only while a whole timeout still fits in
+5 s (`epoch.PreviewPassTime`), and a read that times out ends the pass. A route that hangs
+costs at most one timeout a pass. While the newest epoch is still due, the scoreboard serves
+the newest preview stored, which `preview_epoch` names.
+
+**API.** `/v1/scoreboard` and `/v1/validators/{operator}` give each validator two fields:
+
+- `warp`: the WARP of the snapshot `computed_score` comes from (its latest closed epoch), or `null`;
+- `preview`: `{vp, vp_share, eligible, reason, warp_measured}` from the newest epoch with an
+  available preview, or `null` when no epoch has one or the validator was not bonded at its `H`.
+  `reason` is `null` when eligible.
+
+`/v1/scoreboard` adds three fields beside `validators`:
+
+- `preview_epoch`: the epoch the `preview` rows come from, or `null`;
+- `preview_unavailable`: the code of the newest epoch read, or `null` when that epoch has a
+  preview or no epoch has a preview row (epochs read before this build have none);
+- `preview_threshold`: `params.warp_threshold` of `preview_epoch`, or `null`.
+
+`/v1/validators/{operator}/epochs` gains two fields on every epoch: `warp`, and
+`preview_threshold`, the `params.warp_threshold` of that epoch's available preview or `null`,
+so a history is marked against the threshold that applied to each epoch.
 
 ## Tests
 

@@ -113,6 +113,7 @@ func TestEmission_CarryReducesFreshIssuance(t *testing.T) {
 
 	carry := math.NewInt(400_000)
 	require.NoError(t, f.keeper.SetRemainder(f.ctx, carry))
+	f.bank.credit(types.ModuleName, carry) // a carry is value the module account already holds
 
 	require.NoError(t, f.keeper.DistributeEpochRewards(f.ctx, 9))
 

@@ -94,7 +94,7 @@ func TestScoreboardIsEmptyNotNull(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/scoreboard", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.JSONEq(t, `{"validators":[]}`, rec.Body.String(),
+	require.JSONEq(t, `{"validators":[],"preview_epoch":null,"preview_unavailable":null,"preview_threshold":null}`, rec.Body.String(),
 		"an empty index returns an empty list, never null")
 }
 

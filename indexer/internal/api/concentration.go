@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/saicon-network/saicon/indexer/internal/concentration"
+	"github.com/saicon-network/saicon/indexer/internal/proposers"
 	"github.com/saicon-network/saicon/indexer/internal/store"
 )
 
@@ -241,4 +242,63 @@ func (s *server) entities(w http.ResponseWriter, r *http.Request) {
 		"epoch": row.Epoch, "height": row.Height, "entity_cap": row.EntityCap,
 		"max_active_seats": row.MaxActiveSeats, "entities": out,
 	})
+}
+
+// Defaults and bound of GET /v1/proposers.
+const (
+	proposersDefaultEpochs = 20
+	proposersMaxEpochs     = store.ProposerMaxEpochs
+)
+
+// optUint reads an optional unsigned query value. ok is false for a malformed
+// one, which the caller answers with 400, like ?epoch= on the other endpoints. A
+// value past MaxInt64 is clamped: the SQL driver refuses a uint64 with the high
+// bit set.
+func optUint(q map[string][]string, name string) (n uint64, present, ok bool) {
+	vals, found := q[name]
+	if !found || len(vals) == 0 || vals[0] == "" {
+		return 0, false, true
+	}
+	n, err := strconv.ParseUint(vals[0], 10, 64)
+	if err != nil {
+		return 0, true, false
+	}
+	if n > uint64(math.MaxInt64) {
+		n = uint64(math.MaxInt64)
+	}
+	return n, true, true
+}
+
+// proposers serves the proposer-frequency view: ?epochs=N takes the newest N
+// closed epochs inside [from, to] (N from 1 to 200, more is clamped); with from
+// or to and no epochs it takes the oldest up to 200; with none of the three it
+// takes the newest 20. A malformed value answers 400.
+func (s *server) proposers(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	from, hasFrom, ok1 := optUint(q, "from")
+	to, hasTo, ok2 := optUint(q, "to")
+	n, hasN, ok3 := optUint(q, "epochs")
+	if !ok1 || !ok2 || !ok3 || (hasN && n == 0) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from, to and epochs must be unsigned integers, epochs at least 1"})
+		return
+	}
+	if !hasTo {
+		to = uint64(math.MaxInt64)
+	}
+	newest := 0
+	switch {
+	case hasN:
+		if n > proposersMaxEpochs {
+			n = proposersMaxEpochs
+		}
+		newest = int(n)
+	case !hasFrom && !hasTo:
+		newest = proposersDefaultEpochs
+	}
+	in, err := s.s.ProposerSeries(r.Context(), s.chainID, from, to, newest)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, proposers.Build(in))
 }

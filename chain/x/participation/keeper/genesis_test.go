@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"cosmossdk.io/math"
+	moduletestutil "github.com/cosmos/cosmos-sdk/types/module/testutil"
 
+	module "github.com/saicon-network/saicon/chain/x/participation/module"
 	"github.com/saicon-network/saicon/chain/x/participation/types"
 
 	"github.com/stretchr/testify/require"
@@ -98,4 +100,89 @@ func TestGenesisRoundTripCarriesEveryCollection(t *testing.T) {
 	}
 	require.Equal(t, math.NewInt(1234), epByAddr[valA], "EP came back changed")
 	require.True(t, epByAddr[valB].IsZero())
+}
+
+// WARP rows survive export and import, and a snapshot written before the
+// engine keeps an absent warp: absent means unknown, and a round trip that
+// turned it into 0 would read as a validator that had been punished.
+func TestGenesisRoundTripCarriesWarp(t *testing.T) {
+	const (
+		valA = "saiconvaloper1q85d869qu46e5ukwemwannkkh3xzhrrwrn5ta7"
+		valB = "saicon1pyysjzgfpyysjzgfpyysjzgfpyysjzgfcen8fs"
+	)
+	w82 := math.LegacyMustNewDecFromStr("82")
+	genesisState := types.GenesisState{
+		Params: types.DefaultParams(),
+		Scores: []types.ParticipationScoreSnapshot{
+			{ValidatorAddress: valA, EpochId: 6, UptimeFraction: math.LegacyOneDec(), ComputedScore: math.LegacyOneDec()},
+			{ValidatorAddress: valA, EpochId: 7, UptimeFraction: math.LegacyOneDec(), ComputedScore: math.LegacyOneDec(), Warp: &w82},
+		},
+		Warps: []types.WarpState{
+			{ValidatorAddress: valA, Value: w82, LastEpoch: 7},
+			{ValidatorAddress: valB, Value: math.LegacyZeroDec(), LastEpoch: 0},
+		},
+	}
+	require.NoError(t, genesisState.Validate())
+
+	f := initFixture(t)
+	require.NoError(t, f.keeper.InitGenesis(f.ctx, genesisState))
+	msg, broken := f.keeper.WarpInvariant(f.ctx)
+	require.False(t, broken, msg)
+
+	got, err := f.keeper.ExportGenesis(f.ctx)
+	require.NoError(t, err)
+	require.NoError(t, got.Validate())
+
+	// Through JSON too, as a real export/import goes.
+	cdc := moduletestutil.MakeTestEncodingConfig(module.AppModule{}).Codec
+	bz, err := cdc.MarshalJSON(got)
+	require.NoError(t, err)
+	var back types.GenesisState
+	require.NoError(t, cdc.UnmarshalJSON(bz, &back))
+
+	require.Len(t, back.Warps, 2)
+	byAddr := map[string]types.WarpState{}
+	for _, w := range back.Warps {
+		byAddr[w.ValidatorAddress] = w
+	}
+	require.Equal(t, w82, byAddr[valA].Value)
+	require.Equal(t, uint64(7), byAddr[valA].LastEpoch)
+	require.True(t, byAddr[valB].Value.IsZero())
+	require.Equal(t, uint64(0), byAddr[valB].LastEpoch)
+
+	require.Len(t, back.Scores, 2)
+	for _, s := range back.Scores {
+		switch s.EpochId {
+		case 6:
+			require.Nil(t, s.Warp, "a pre-WARP snapshot must not gain a warp")
+		case 7:
+			require.NotNil(t, s.Warp)
+			require.Equal(t, w82, *s.Warp)
+		}
+	}
+}
+
+// A genesis written before S10 has params without the four WARP fields.
+// Stored as they are, they read back as zeros and WARP never steps, with a log
+// line as the only trace; InitGenesis refuses them instead (ADR-0009 R8), and
+// so does every other params rule.
+func TestInitGenesisRefusesInvalidParams(t *testing.T) {
+	cdc := moduletestutil.MakeTestEncodingConfig(module.AppModule{}).Codec
+	var preS10 types.GenesisState
+	require.NoError(t, cdc.UnmarshalJSON([]byte(`{"params":{"epoch_length_blocks":"100","ep_decay":"0.000000000000000000"}}`), &preS10))
+	require.True(t, preS10.Params.WarpFall.IsNil())
+
+	f := initFixture(t)
+	require.ErrorContains(t, f.keeper.InitGenesis(f.ctx, preS10), "participation genesis: params: warp_fall must not be nil")
+	stored, err := f.keeper.Params.Get(f.ctx)
+	require.NoError(t, err)
+	require.Equal(t, types.DefaultParams(), stored, "the fixture's params are left as they were")
+
+	bad := *types.DefaultGenesis()
+	bad.Params.WarpRise = bad.Params.WarpFall
+	require.ErrorContains(t, initFixture(t).keeper.InitGenesis(f.ctx, bad), "0 < warp_rise < warp_fall <= 1")
+
+	bad = *types.DefaultGenesis()
+	bad.Params.EpDecay = math.LegacyOneDec()
+	require.ErrorContains(t, initFixture(t).keeper.InitGenesis(f.ctx, bad), "ep_decay must be in [0,1)")
 }

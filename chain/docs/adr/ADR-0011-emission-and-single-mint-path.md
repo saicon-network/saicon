@@ -20,6 +20,46 @@ and criterion 2's all-or-nothing epoch. D5's mechanism was **settled in favour o
 written here — recorded under *Consequences* — and the D7 param surface now being written into
 the proto uses different field names, noted under D7.
 
+**Implementation status — S10 (2026-11-24): F3's payout leg is built; its fee leg is not.**
+Each eligible validator's epoch share now leaves the `x/rewards` module account for the
+`x/distribution` module account (`SendCoinsFromModuleToModule`) and is booked with
+`AllocateTokensToValidator`, which credits the validator's commission to its accumulated
+commission, the rest to its delegators' current rewards, and the whole amount to its outstanding
+rewards. Delegators and operators withdraw with the stock `MsgWithdrawDelegatorReward` /
+`MsgWithdrawValidatorCommission`. Eligibility, the equal split, the carry, the cap clamp and the
+gas offset are unchanged; only the route moved (`Keeper.payThroughDistribution` in
+`x/rewards/keeper/emission.go`). A validator `x/staking` does not find, or one with zero tokens,
+is not allocatable: its share is carried and the epoch is recorded unpaid, a denial
+(`eligible: false`) with reason `not allocatable` that `RewardSummary` and the indexer read like
+any other — there is no fallback to the operator account, and the module's bank interface no
+longer has an account-facing send. The epoch is all or nothing: `MaybeRunEpoch` runs
+`DistributeEpochRewards` in one cache context and writes it only when it completes, so an error
+anywhere — after the mint, or halfway through the payout loop — discards the mint, every
+transfer and booking and every snapshot, and leaves the carry and the observed gas fees for the
+next epoch. The chain still does not halt on it. That closes criterion 2's all-or-nothing
+clause. The
+**fee leg is not adopted**: `x/distribution` keeps sweeping the fee collector every block and
+`x/rewards` keeps only observing it (D2), so the fee half of validator income stays
+stake-weighted and outside the PoP gate, and D4's "`x/distribution`'s own allocation stays
+disabled" is not in effect. Ships with the v0.11.0 upgrade; behaviour only, no store change.
+Spec: the design notes (rulings R1-R7).
+
+Two properties of the S10 route were reviewed and accepted:
+
+- **Unclaimed rewards are not circulating supply for the stake cap.** Until withdrawn, the PoP
+  share sits in the `x/distribution` module account, as fee rewards always have, and
+  `x/stakeengine` subtracts that account from public circulating supply
+  (`NonCirculatingModules`, ADR-0012). Unclaimed PoP and fee rewards therefore count as
+  circulating once withdrawn, and the global cap's `0.60 · public circulating` term is
+  understated by the unclaimed amount. Before S10 the PoP share counted at once, because it
+  landed in the operator account.
+- **The share is weighted by stake at epoch close.** It is booked once, in the epoch's closing
+  block, so `x/distribution` splits it by the delegations standing at that moment: a delegation
+  made in the closing block earns the same per-token share as one held through the whole
+  epoch, and one undelegated a block earlier earns nothing for it. The unbonding period makes a
+  delegate-collect-undelegate cycle cost far more than one epoch's share, since the stake earns
+  nothing while it unbonds. Revisit if epochs get long.
+
 Origin: Decision Register v1.0 §2.5 (`DEVELOPMENT.md:137-155`), calibration Stage 5
 (`DEVELOPMENT.md:274`), integrated stress test long-horizon result (`DEVELOPMENT.md:291-293`).
 Blockers: **B8** (single mint path + max supply), **B9** (post-max-supply security budget),
@@ -145,6 +185,14 @@ into its pool, the same fees are paid **twice** — once stake-weighted and unga
 F3 is a recommendation, not a Register decision. It requires disabling `x/distribution`'s own
 per-block allocation (or emptying the fee collector before it runs) — the change must be proven
 by the conservation test in *Acceptance criteria*, not assumed.
+
+*S10 (2026-11-24):* F3's **payout leg** is implemented on its own — the PoP share is paid through
+`AllocateTokensToValidator`, so commission and delegator shares use the stock accumulators. Its
+**fee leg** is not: fees stay with `x/distribution`'s per-block allocation and only offset
+issuance, which is why nothing is paid twice and why the fee half remains outside the PoP gate.
+Whether fees join the pool (F1, or F3's sweep) stays open with Q2. The rounding rule for the
+new leg: the whole share counts as paid when it leaves `x/rewards`; `x/distribution`'s decimal
+truncation dust stays in its module account (community pool or outstanding), as it does for fees.
 
 ### D3 — The single authoritative mint path (B8) — disposition of `x/mint` (RECOMMENDED)
 
@@ -410,7 +458,9 @@ is in *Consequences*:
   D4's "mint the remainder, then stop" is a *mechanism* for the terminal state, not an *answer*
   to it.
 - **B7, commission (🔒).** 10% / 5-15% recorded, "not economically proven".
-- **Fee routing (D2, F1/F2/F3)** — a recommendation, owner/architect ratification needed.
+- **Fee routing (D2, F1/F2/F3)** — a recommendation, owner/architect ratification needed. The
+  payout leg was settled in S10 (F3's route through `AllocateTokensToValidator`); what stays open
+  is the fee leg — whether fee revenue joins the gated pool or stays with `x/distribution`.
 - **Kill-switch duration bound (D4)** — the "N epochs before re-ratification" number is not set.
 - **Budget-rate governance bounds (D7)** — `[0.10,0.20]` / `[0.0025,0.0075]` / `[floor,0.01]` are
   this ADR's proposal on a §2.10 silence, same standing as the bound above; ADR-0013 owns both.
@@ -469,10 +519,13 @@ is in *Consequences*:
     (`x/rewards/keeper/emission.go`), so a **partially emitted epoch commits to state**.
     Acceptance criterion 2 forbids this; the rework must make the epoch payout all-or-nothing
     (cached context or precomputed-then-applied). `8e27782` moved the mint out of the loop but
-    left the payout loop non-transactional.
+    left the payout loop non-transactional. *Closed in S10:* `MaybeRunEpoch` runs the epoch in
+    one cache context and writes it only on success (see *Implementation status — S10*).
   - Commission has **no substrate**: rewards go whole to the operator account
     (`SendCoinsFromModuleToAccount` to `sdk.AccAddress(valAddr.Bytes())`), so delegators currently
-    receive nothing from the PoP path. Further, stock `x/staking` has `MinCommissionRate` but
+    receive nothing from the PoP path. *Closed in S10:* the share is paid through
+    `x/distribution`, which applies the validator's own commission rate and credits the
+    delegators (see *Implementation status — S10*). Further, stock `x/staking` has `MinCommissionRate` but
     **no maximum** (`cosmos-sdk@v0.53.6/x/staking/types/params.go:34-35`), so the Register's
     5-15% *range* is only half-enforceable without custom validation.
   - `x/validatorregistry` holds an unused `Minter` permission (`app/app_config.go:92`) — dormant
@@ -495,7 +548,9 @@ is in *Consequences*:
   only for the mock pool — criterion 2's all-or-nothing clause, criterion 4's fee clause, criterion
   5 under the new formula and criterion 6 are all still unwritten, and none of it is an
   *integration* test yet, which is what `DEVELOPMENT.md:374` asks for. Until they pass,
-  `DEVELOPMENT.md:353` stands: no real payouts.
+  `DEVELOPMENT.md:353` stands: no real payouts. *Closed in S10 for criterion 2's all-or-nothing
+  clause:* `TestAnAbortedEpochLeavesNoTrace` (app level, real keepers) aborts an epoch mid-payout
+  and asserts that nothing it wrote survives; the other clauses listed here are unchanged.
 
 ## Alternatives considered
 

@@ -576,6 +576,12 @@ func main() {
 
 	f := follow.New(s, rpc, epochLen)
 	reader := epoch.New(s, rest, epochLen)
+	// The preview pass reads, after each epoch pass, the voting-power preview of
+	// the epochs that pass finished. It retries a transient failure by the
+	// concentration pass's re-read rule, and its own time limits keep it to a
+	// few seconds a tick.
+	preview := epoch.NewPreviewPass(s, chain.NewREST(restURL), status.ChainID, epochLen,
+		rereadBackoffPasses, rereadMaxFailures)
 	// The concentration pass has clients of its own, so their request counts
 	// are its work alone (the API's tip reads go through rpc).
 	conc := newConcRunner(s, chain.NewRPC(rpcURL), chain.NewREST(restURL), status.ChainID, epochLen,
@@ -612,6 +618,9 @@ func main() {
 		// see epochPass's doc comment for why, and its own tests for the
 		// scheduling guarantees this composition has to uphold.
 		epochPass: func(ctx context.Context) {
+			// The preview pass runs whatever the epoch walk did: an epoch already
+			// due is read even on a tick whose walk stopped early.
+			defer preview.Pass(ctx)
 			h, err := s.IndexedHeight(ctx, status.ChainID)
 			if err != nil {
 				log.Printf("cursor: %v", err)

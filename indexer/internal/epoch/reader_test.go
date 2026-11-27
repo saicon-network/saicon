@@ -27,6 +27,19 @@ type fakeREST struct {
 	// operator is the cheapest way to reproduce a real REST failure landing
 	// after some validators' rows are already written and before others'.
 	epErr map[string]error
+
+	// previewAt answers VotingPowerPreviewAt. Unset, the node predates the route.
+	previewAt func(height int64) (*chain.Preview, error)
+	// previewHeights records every height the preview was asked at.
+	previewHeights []int64
+}
+
+func (f *fakeREST) VotingPowerPreviewAt(_ context.Context, height int64) (*chain.Preview, error) {
+	f.previewHeights = append(f.previewHeights, height)
+	if f.previewAt == nil {
+		return nil, &chain.PreviewUnavailable{Code: chain.PreviewRouteMissing, Err: errors.New("HTTP 501")}
+	}
+	return f.previewAt(height)
 }
 
 func (f *fakeREST) Validators(context.Context) ([]chain.Validator, error) { return f.vals, nil }

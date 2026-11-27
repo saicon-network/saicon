@@ -40,27 +40,51 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
-// addedColumns are columns that joined `chains` after the first version of this
-// schema. CREATE TABLE IF NOT EXISTS is a no-op against a table that already
+// addedColumns are columns that joined a table after its first version, keyed
+// by table. CREATE TABLE IF NOT EXISTS is a no-op against a table that already
 // exists, so a database written by an older build keeps its old shape and every
 // query naming a newer column fails with "no such column" — which the binary
 // would report as a corrupt database and exit on, for ever, against a volume
 // that restart: unless-stopped never lets go of.
 //
 // CREATE INDEX IF NOT EXISTS does not have this problem: it is its own statement
-// and applies to an existing table. Only columns need this.
-var addedColumns = map[string]string{
-	"first_walked_height": "INTEGER NOT NULL DEFAULT 1",
-	"epoch_length":        "INTEGER",
+// and applies to an existing table. Only columns need this. It is the one ALTER
+// the schema allows (schema.sql says so too); a new table needs none.
+var addedColumns = map[string]map[string]string{
+	"chains": {
+		"first_walked_height": "INTEGER NOT NULL DEFAULT 1",
+		"epoch_length":        "INTEGER",
+	},
+	// S10: WARP from the participation snapshot. Rows read before it stay NULL,
+	// which is what they are: no WARP was read for them.
+	"epoch_snapshots": {
+		"warp": "TEXT",
+	},
 }
 
-// migrate adds any column of `chains` this build knows about and the file does
-// not. Both of them are nullable or defaulted, so an older database gains them
-// with the meaning "not recorded" — which is what it is.
+// migrate adds any column of addedColumns this build knows about and the file
+// does not. Every one of them is nullable or defaulted, so an older database
+// gains them with the meaning "not recorded" — which is what it is.
 func migrate(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(chains)`)
+	tables := make([]string, 0, len(addedColumns))
+	for t := range addedColumns {
+		tables = append(tables, t)
+	}
+	sort.Strings(tables)
+	for _, table := range tables {
+		if err := addColumns(ctx, db, table, addedColumns[table]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// addColumns adds to table every column of cols it lacks. table and the
+// declarations come from addedColumns, never from input.
+func addColumns(ctx context.Context, db *sql.DB, table string, cols map[string]string) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
-		return fmt.Errorf("read chains columns: %w", err)
+		return fmt.Errorf("read %s columns: %w", table, err)
 	}
 	have := map[string]bool{}
 	for rows.Next() {
@@ -71,23 +95,28 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		var pk int
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
 			_ = rows.Close()
-			return fmt.Errorf("read chains columns: %w", err)
+			return fmt.Errorf("read %s columns: %w", table, err)
 		}
 		have[name] = true
 	}
 	_ = rows.Close()
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read chains columns: %w", err)
+		return fmt.Errorf("read %s columns: %w", table, err)
 	}
 	if len(have) == 0 {
-		return nil // no chains table yet; the schema above just created it
+		return nil // no such table yet; the schema above just created it
 	}
-	for name, decl := range addedColumns {
+	names := make([]string, 0, len(cols))
+	for name := range cols {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		if have[name] {
 			continue
 		}
-		if _, err := db.ExecContext(ctx, `ALTER TABLE chains ADD COLUMN `+name+` `+decl); err != nil {
-			return fmt.Errorf("add chains.%s: %w", name, err)
+		if _, err := db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+cols[name]); err != nil {
+			return fmt.Errorf("add %s.%s: %w", table, name, err)
 		}
 	}
 	return nil
@@ -297,6 +326,12 @@ type SnapshotRow struct {
 	RewardEligible *bool   `json:"reward_eligible"`
 	RewardReason   *string `json:"reward_reason"`
 	Proposals      *int64  `json:"proposals"`
+	// Warp is the snapshot's WARP as the chain wrote it; nil when the snapshot
+	// carries none or the row was read before this field existed.
+	Warp *string `json:"warp"`
+	// PreviewThreshold is read only, filled by Epochs: the warp_threshold of
+	// this epoch's available preview, nil when the epoch has none.
+	PreviewThreshold *string `json:"preview_threshold"`
 }
 
 func (s *Store) UpsertValidator(ctx context.Context, chainID string, v ValidatorRow) error {
@@ -326,16 +361,16 @@ func (s *Store) UpsertValidator(ctx context.Context, chainID string, v Validator
 func (s *Store) UpsertSnapshot(ctx context.Context, chainID string, r SnapshotRow) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO epoch_snapshots (chain_id, epoch, operator, computed_score, computed_at,
-		    blocks_signed, blocks_missed, reward_amount, reward_eligible, reward_reason, proposals)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		    blocks_signed, blocks_missed, reward_amount, reward_eligible, reward_reason, proposals, warp)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(chain_id, epoch, operator) DO UPDATE SET
 		    computed_score=excluded.computed_score, computed_at=excluded.computed_at,
 		    blocks_signed=excluded.blocks_signed, blocks_missed=excluded.blocks_missed,
 		    reward_amount=excluded.reward_amount, reward_eligible=excluded.reward_eligible,
-		    reward_reason=excluded.reward_reason, proposals=excluded.proposals`,
+		    reward_reason=excluded.reward_reason, proposals=excluded.proposals, warp=excluded.warp`,
 		chainID, r.Epoch, r.Operator, r.ComputedScore, r.ComputedAt,
 		r.BlocksSigned, r.BlocksMissed, r.RewardAmount, r.RewardEligible,
-		r.RewardReason, r.Proposals)
+		r.RewardReason, r.Proposals, r.Warp)
 	if err != nil {
 		return fmt.Errorf("upsert snapshot %s@%d: %w", r.Operator, r.Epoch, err)
 	}
@@ -407,9 +442,48 @@ type ScoreRow struct {
 	LatestEpoch    *uint64 `json:"latest_epoch"`
 	ComputedScore  *string `json:"computed_score"`
 	Proposals      *int64  `json:"proposals"`
+	// Warp is the WARP of the same snapshot as ComputedScore: the validator's
+	// latest closed epoch. nil: that snapshot carries none.
+	Warp *string `json:"warp"`
+	// Preview is this validator's row of the newest available voting-power
+	// preview (Board.Head.Epoch). nil: no preview is available, or the
+	// validator was not in the bonded set it covers.
+	Preview *PreviewView `json:"preview"`
 }
 
+// PreviewView is the part of a vp_preview row the scoreboard serves. vp and
+// vp_share are the chain's strings, unchanged.
+type PreviewView struct {
+	VP           string  `json:"vp"`
+	VPShare      string  `json:"vp_share"`
+	Eligible     bool    `json:"eligible"`
+	Reason       *string `json:"reason"`
+	WarpMeasured bool    `json:"warp_measured"`
+}
+
+// Board is the scoreboard together with the preview head its rows were joined at.
+type Board struct {
+	Rows []ScoreRow
+	Head PreviewHead
+}
+
+// Scoreboard is Board's rows.
 func (s *Store) Scoreboard(ctx context.Context, chainID string) ([]ScoreRow, error) {
+	b, err := s.Board(ctx, chainID)
+	if err != nil {
+		return nil, err
+	}
+	return b.Rows, nil
+}
+
+// Board reads the preview head first and joins the preview at exactly that
+// epoch, so the rows and the head served beside them always agree: a preview
+// written in between belongs to a newer epoch and is simply not joined yet.
+func (s *Store) Board(ctx context.Context, chainID string) (Board, error) {
+	head, err := s.PreviewHead(ctx, chainID)
+	if err != nil {
+		return Board{}, err
+	}
 	rows, err := s.db.QueryContext(ctx,
 		// COALESCE only on the fields x/staking always answers, where the column is
 		// nullable but UpsertValidator never leaves it unset. Everything the chain
@@ -421,35 +495,51 @@ func (s *Store) Scoreboard(ctx context.Context, chainID string) ([]ScoreRow, err
 		//
 		// SQL orders only the NULLs. The scores themselves are ordered in Go,
 		// exactly — see the sort below.
+		//
+		// The preview is joined at head.Epoch; with no available preview that
+		// argument is NULL, and `p.epoch = NULL` matches nothing.
 		`SELECT v.operator, COALESCE(v.moniker,''), COALESCE(v.staking_status,''),
 		        COALESCE(v.jailed,0), COALESCE(v.tokens,''),
 		        v.registry_status, v.lockup_seconds, v.compliance_flag, v.accumulated_ep,
-		        e.epoch, e.computed_score, e.proposals
+		        e.epoch, e.computed_score, e.proposals, e.warp,
+		        p.vp, p.vp_share, p.eligible, p.reason, p.warp_measured
 		   FROM validators v
 		   LEFT JOIN epoch_snapshots e
 		     ON e.chain_id = v.chain_id AND e.operator = v.operator
 		    AND e.epoch = (SELECT MAX(epoch) FROM epoch_snapshots
 		                    WHERE chain_id = v.chain_id AND operator = v.operator)
+		   LEFT JOIN vp_preview p
+		     ON p.chain_id = v.chain_id AND p.operator = v.operator AND p.epoch = ?
 		  WHERE v.chain_id = ?
-		  ORDER BY e.computed_score IS NULL, v.operator ASC`, chainID)
+		  ORDER BY e.computed_score IS NULL, v.operator ASC`, head.Epoch, chainID)
 	if err != nil {
-		return nil, fmt.Errorf("scoreboard: %w", err)
+		return Board{}, fmt.Errorf("scoreboard: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	out := []ScoreRow{} // never nil: an empty index serves [], not null
 	for rows.Next() {
 		var r ScoreRow
+		var vp, share, reason sql.NullString
+		var eligible, measured sql.NullBool
 		if err := rows.Scan(&r.Operator, &r.Moniker, &r.StakingStatus,
 			&r.Jailed, &r.Tokens, &r.RegistryStatus, &r.LockupSeconds,
 			&r.ComplianceFlag, &r.AccumulatedEP,
-			&r.LatestEpoch, &r.ComputedScore, &r.Proposals); err != nil {
-			return nil, fmt.Errorf("scoreboard scan: %w", err)
+			&r.LatestEpoch, &r.ComputedScore, &r.Proposals, &r.Warp,
+			&vp, &share, &eligible, &reason, &measured); err != nil {
+			return Board{}, fmt.Errorf("scoreboard scan: %w", err)
+		}
+		if vp.Valid {
+			r.Preview = &PreviewView{VP: vp.String, VPShare: share.String, Eligible: eligible.Bool,
+				WarpMeasured: measured.Bool}
+			if reason.Valid {
+				r.Preview.Reason = &reason.String
+			}
 		}
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return Board{}, err
 	}
 
 	// The scores are compared as exact decimals, not as floats.
@@ -482,7 +572,7 @@ func (s *Store) Scoreboard(ctx context.Context, chainID string) ([]ScoreRow, err
 		}
 		return ra.Cmp(rb) > 0
 	})
-	return out, nil
+	return Board{Rows: out, Head: head}, nil
 }
 
 // MaxEpochsPerQuery caps a single range so one call cannot ask for an unbounded
@@ -493,11 +583,13 @@ const MaxEpochsPerQuery = 1000
 // Epochs returns one validator's series, oldest first.
 func (s *Store) Epochs(ctx context.Context, chainID, operator string, from, to uint64) ([]SnapshotRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT epoch, computed_score, computed_at, blocks_signed, blocks_missed,
-		        reward_amount, reward_eligible, reward_reason, proposals
-		   FROM epoch_snapshots
-		  WHERE chain_id=? AND operator=? AND epoch BETWEEN ? AND ?
-		  ORDER BY epoch ASC
+		`SELECT s.epoch, s.computed_score, s.computed_at, s.blocks_signed, s.blocks_missed,
+		        s.reward_amount, s.reward_eligible, s.reward_reason, s.proposals, s.warp, p.threshold
+		   FROM epoch_snapshots s
+		   LEFT JOIN vp_preview_epochs p
+		     ON p.chain_id = s.chain_id AND p.epoch = s.epoch AND p.unavailable IS NULL
+		  WHERE s.chain_id=? AND s.operator=? AND s.epoch BETWEEN ? AND ?
+		  ORDER BY s.epoch ASC
 		  LIMIT ?`, chainID, operator, from, to, MaxEpochsPerQuery)
 	if err != nil {
 		return nil, fmt.Errorf("epochs: %w", err)
@@ -509,7 +601,7 @@ func (s *Store) Epochs(ctx context.Context, chainID, operator string, from, to u
 		r := SnapshotRow{Operator: operator}
 		if err := rows.Scan(&r.Epoch, &r.ComputedScore, &r.ComputedAt, &r.BlocksSigned,
 			&r.BlocksMissed, &r.RewardAmount, &r.RewardEligible, &r.RewardReason,
-			&r.Proposals); err != nil {
+			&r.Proposals, &r.Warp, &r.PreviewThreshold); err != nil {
 			return nil, fmt.Errorf("epochs scan: %w", err)
 		}
 		out = append(out, r)

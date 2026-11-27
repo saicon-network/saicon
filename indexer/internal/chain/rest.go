@@ -2,7 +2,9 @@ package chain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -56,6 +58,15 @@ type Snapshot struct {
 	ComputedAt    string
 	BlocksSigned  uint64
 	BlocksMissed  uint64
+	// Warp is the validator's WARP after this epoch's update, exactly as the
+	// chain wrote it (an 18-decimal LegacyDec string). nil when the snapshot
+	// carries none: a snapshot written before the WARP engine answers
+	// "warp": null, and a node that predates the field omits it. Both mean
+	// unknown, never zero. A value that is not a decimal string from 0 to 100
+	// is not kept either: Warp is nil and InvalidWarp holds what the node sent,
+	// for the caller to log.
+	Warp        *string
+	InvalidWarp string
 }
 
 type Reward struct {
@@ -271,10 +282,11 @@ func (r *REST) EP(ctx context.Context, operator string) (*EP, error) {
 func (r *REST) Snapshot(ctx context.Context, operator string, epoch uint64) (*Snapshot, error) {
 	var body struct {
 		Snapshot struct {
-			ComputedScore string `json:"computed_score"`
-			ComputedAt    string `json:"computed_at"`
-			BlocksSigned  string `json:"blocks_signed"`
-			BlocksMissed  string `json:"blocks_missed"`
+			ComputedScore string          `json:"computed_score"`
+			ComputedAt    string          `json:"computed_at"`
+			BlocksSigned  string          `json:"blocks_signed"`
+			BlocksMissed  string          `json:"blocks_missed"`
+			Warp          json.RawMessage `json:"warp"`
 		} `json:"snapshot"`
 	}
 	url := fmt.Sprintf("%s/saicon/chain/participation/v1/snapshot/%s/%d", r.base, operator, epoch)
@@ -292,12 +304,42 @@ func (r *REST) Snapshot(ctx context.Context, operator string, epoch uint64) (*Sn
 	if err != nil {
 		return nil, fmt.Errorf("snapshot %s@%d: blocks_missed %q: %w", operator, epoch, body.Snapshot.BlocksMissed, err)
 	}
+	warp, invalid := parseWarp(body.Snapshot.Warp)
 	return &Snapshot{
 		ComputedScore: body.Snapshot.ComputedScore,
 		ComputedAt:    body.Snapshot.ComputedAt,
 		BlocksSigned:  signed,
 		BlocksMissed:  missed,
+		Warp:          warp,
+		InvalidWarp:   invalid,
 	}, nil
+}
+
+// parseWarp reads the snapshot's warp field. Absent and null are no value. A
+// string holding a decimal from 0 to 100 is the value, unchanged. Anything else
+// (a number, an empty string, "-1", "1e2", "NaN", 101) is no value either, and
+// is returned as invalid so the caller can say so.
+func parseWarp(raw json.RawMessage) (warp *string, invalid string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil || !ValidWarp(s) {
+		return nil, string(raw)
+	}
+	return &s, ""
+}
+
+var warpMax = big.NewRat(100, 1)
+
+// ValidWarp reports whether s is a WARP as the chain writes one: a plain
+// decimal string, no sign and no exponent, from 0 to 100.
+func ValidWarp(s string) bool {
+	if !reDec.MatchString(s) {
+		return false
+	}
+	v, ok := new(big.Rat).SetString(s)
+	return ok && v.Cmp(warpMax) <= 0
 }
 
 func (r *REST) RewardSnapshot(ctx context.Context, operator string, epoch uint64) (*Reward, error) {

@@ -17,7 +17,14 @@ import (
 // silently erased the module: score snapshots and accumulated EP both vanished,
 // and since eligibility is ACTIVE and compliant and EP > 0 (V-2), every
 // validator came back ineligible with nothing reporting why.
+//
+// The params are validated first. A genesis written before S10 has no WARP
+// params; stored unvalidated, they read back as zeros, and WARP would never
+// step with nothing but a log line to say so (ADR-0009 R8).
 func (k Keeper) InitGenesis(ctx context.Context, genState types.GenesisState) error {
+	if err := genState.Params.Validate(); err != nil {
+		return fmt.Errorf("participation genesis: params: %w", err)
+	}
 	if err := k.Params.Set(ctx, genState.Params); err != nil {
 		return err
 	}
@@ -59,6 +66,16 @@ func (k Keeper) InitGenesis(ctx context.Context, genState types.GenesisState) er
 		}
 		if err := k.EpochBlocksMissed.Set(ctx, addr.Bytes(), c.Count); err != nil {
 			return fmt.Errorf("participation genesis: epoch_blocks_missed[%d] (%s): %w", i, c.ValidatorAddress, err)
+		}
+	}
+
+	for i, w := range genState.Warps {
+		addr, err := valAddrOf(w.ValidatorAddress)
+		if err != nil {
+			return fmt.Errorf("participation genesis: warps[%d] (%s): %w", i, w.ValidatorAddress, err)
+		}
+		if err := k.Warp.Set(ctx, addr.Bytes(), w); err != nil {
+			return fmt.Errorf("participation genesis: warps[%d] (%s): %w", i, w.ValidatorAddress, err)
 		}
 	}
 
@@ -114,6 +131,13 @@ func (k Keeper) ExportGenesis(ctx context.Context) (*types.GenesisState, error) 
 			ValidatorAddress: sdk.ValAddress(addr).String(),
 			Count:            n,
 		})
+		return false, nil
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := k.Warp.Walk(ctx, nil, func(_ []byte, w types.WarpState) (bool, error) {
+		genesis.Warps = append(genesis.Warps, w)
 		return false, nil
 	}); err != nil {
 		return nil, err

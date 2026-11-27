@@ -30,6 +30,14 @@ service Query {
   rpc RewardSummary(QueryRewardSummaryRequest) returns (QueryRewardSummaryResponse) {
     option (google.api.http).get = "/saicon/chain/rewards/v1/summary/{validator_address}/{from_epoch}/{to_epoch}";
   }
+
+  // VotingPowerPreview computes, for every bonded validator, the voting power
+  // ADR-0008 §1 would give it from today's state, beside the power CometBFT
+  // gives it now. Read-only: it writes nothing and feeds nothing to consensus.
+  // Entity caps, seat selection and the lottery are not applied (S10 R12).
+  rpc VotingPowerPreview(QueryVotingPowerPreviewRequest) returns (QueryVotingPowerPreviewResponse) {
+    option (google.api.http).get = "/saicon/chain/rewards/v1/voting_power_preview";
+  }
 }
 
 // QueryParamsRequest is request type for the Query/Params RPC method.
@@ -82,4 +90,107 @@ message QueryRewardSummaryResponse {
   uint64 epochs_requested = 3;
   uint64 epochs_with_record = 4;
   uint64 epochs_paid = 5;
+}
+
+// QueryVotingPowerPreviewRequest is the request for Query/VotingPowerPreview.
+message QueryVotingPowerPreviewRequest {}
+
+// VotingPowerPreviewParams are the inputs the preview applied to every validator.
+message VotingPowerPreviewParams {
+  // warp_threshold is x/participation's warp_threshold, on 0-100.
+  string warp_threshold = 1 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // warp_initial is the WARP used for a validator with no stored WARP.
+  string warp_initial = 2 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // validator_cap is x/stakeengine's current per-validator cap, in nscn.
+  string validator_cap = 3 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+}
+
+// VotingPowerPreviewEntry is one bonded validator in the preview.
+message VotingPowerPreviewEntry {
+  string operator_address = 1;
+  // bonded is the validator's bonded tokens, in nscn.
+  string bonded = 2 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // capped_bonded is min(bonded, validator_cap).
+  string capped_bonded = 3 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // warp is the stored WARP, or warp_initial when the validator has none.
+  string warp = 4 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // warp_measured is true when the stored WARP comes from a scored epoch
+  // (its last_epoch > 0). It is false with no stored WARP (warp is then
+  // warp_initial) and for a validator punished before its first scored
+  // epoch (warp is then its stored 0).
+  bool warp_measured = 5;
+  // compliant is C = 1, read from x/compliance as the reward gate reads it.
+  bool compliant = 6;
+  // status is the validator's x/validatorregistry status.
+  string status = 7;
+  // vp = floor(capped_bonded * warp / 100 * C), in nscn.
+  string vp = 8 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // vp_share is vp / total_vp with 6 decimals, truncated; "0" when not eligible.
+  string vp_share = 9;
+  // stock_power is the validator's CometBFT power today.
+  int64 stock_power = 10;
+  // stock_share is stock_power / total_stock_power with 6 decimals, truncated.
+  string stock_share = 11;
+  // eligible is status ACTIVE, C = 1, EP > 0 (the reward gate) and
+  // warp >= warp_threshold.
+  bool eligible = 12;
+  // reason says why a validator is not eligible: "not active",
+  // "non-compliant", "EP=0" or "warp below threshold", the first that
+  // applies. Empty when eligible.
+  string reason = 13;
+}
+
+// QueryVotingPowerPreviewResponse is the response for Query/VotingPowerPreview.
+// validators are ordered by vp descending, ties by operator_address
+// ascending as a string.
+message QueryVotingPowerPreviewResponse {
+  int64 height = 1;
+  // epoch is the last closed epoch, height / epoch_length: the one whose WARP
+  // the preview reads. 0 before the first.
+  uint64 epoch = 2;
+  VotingPowerPreviewParams params = 3 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  repeated VotingPowerPreviewEntry validators = 4 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
+  // total_vp is the sum of vp over eligible validators, the vp_share
+  // denominator.
+  string total_vp = 5 [
+    (cosmos_proto.scalar) = "cosmos.Int",
+    (gogoproto.customtype) = "cosmossdk.io/math.Int",
+    (gogoproto.nullable) = false
+  ];
+  // total_stock_power is the sum of stock_power over the bonded set.
+  int64 total_stock_power = 6;
 }

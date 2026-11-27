@@ -16,6 +16,7 @@
 #   bash ./scripts/rehearse-cosmovisor.sh                      # builds the image from this tree
 #   IMAGE=saicon-node:x bash ./scripts/rehearse-cosmovisor.sh  # an image already built from it
 #   OLD_REF=v0.9.1 UPGRADE=v0.10.0 (defaults)                # the upgrade rehearsed
+#   OLD_REF=cfbd786 UPGRADE=v0.11.0                           # v0.10.2 -> v0.11.0
 #   KEEP=1                                                    # keep containers, volumes, temp dir
 #
 # Needs docker, go, jq, python3 and git. Nothing is published on the host but a file
@@ -70,7 +71,8 @@ wait_height() { # container target [max seconds]
 }
 tx() { # args... ; waits for the tx to be in a block and checks its code
   local out hash r
-  out=$(X tx "$@" "${KR[@]}" "${TXF[@]}" 2>&1) || fail "tx broadcast failed: $out"
+  # stderr kept apart: the binary may print warnings there, and stdout must stay JSON.
+  out=$(X tx "$@" "${KR[@]}" "${TXF[@]}" 2>"$TMP/tx.err") || fail "tx broadcast failed: $out $(cat "$TMP/tx.err")"
   [ "$(jq -r '.code // 1' <<<"$out")" = 0 ] || fail "tx refused at CheckTx: $(jq -r '.raw_log // .' <<<"$out")"
   hash=$(jq -r .txhash <<<"$out")
   r=""
@@ -102,6 +104,10 @@ git -C "$REPO_DIR" rev-parse --verify --quiet "${OLD_REF}^{commit}" >/dev/null |
 git -C "$REPO_DIR" worktree add --detach "$WORKTREE" "$OLD_REF" >/dev/null 2>&1 || fail "git worktree add $OLD_REF failed"
 mkdir -p "$TMP/old" "$TMP/srv"
 LDF="-X github.com/cosmos/cosmos-sdk/version.Name=saicon -X github.com/cosmos/cosmos-sdk/version.AppName=saicond"
+# Both binaries are built with the go.mod toolchain, as CI and the image build them. A newer host
+# Go makes bytedance/sonic print a warning on stderr, and Cosmovisor reads `saicond status`
+# with stdout and stderr combined: the height never parses and the upgrade is never taken.
+export GOTOOLCHAIN="${GOTOOLCHAIN_REHEARSAL:-go$(awk '/^go /{print $2}' "$CHAIN_DIR/go.mod")}"
 (cd "$WORKTREE/chain" && CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH go build \
   -ldflags "$LDF -X github.com/cosmos/cosmos-sdk/version.Version=$OLD_REF" -o "$TMP/old/saicond" ./cmd/saicond) || fail "building $OLD_REF failed"
 (cd "$CHAIN_DIR" && CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH go build \
@@ -132,7 +138,8 @@ OLD genesis add-genesis-account validator 1000000000000000nscn "${KR[@]}"
 OLD genesis gentx validator 100000000000000nscn --chain-id "$CHAIN_ID" "${KR[@]}" >/dev/null 2>&1
 OLD genesis collect-gentxs --home "$H" >/dev/null 2>&1
 in_vol "G=$H/config/genesis.json; jq '.app_state.gov.params.voting_period = \"20s\" | .app_state.gov.params.expedited_voting_period = \"10s\"
-  | .app_state.stakeengine.params.validator_cap_floor = \"200000000000000\"' \$G > \$G.tmp && mv \$G.tmp \$G && sed -i 's#^timeout_commit = .*#timeout_commit = \"2s\"#' $H/config/config.toml"
+  | .app_state.stakeengine.params.validator_cap_floor = \"200000000000000\"
+  | if (.app_state.stakeengine.params | has(\"entity_cap_floor\")) then .app_state.stakeengine.params.entity_cap_floor = \"200000000000000\" else . end' \$G > \$G.tmp && mv \$G.tmp \$G && sed -i 's#^timeout_commit = .*#timeout_commit = \"2s\"#' $H/config/config.toml"
 OLD genesis validate-genesis --home "$H" >/dev/null 2>&1 || fail "genesis does not validate on the old binary"
 start_node "$C" "$VOL"
 wait_height "$C" 3
@@ -181,9 +188,24 @@ eq "$(docker exec "$C" readlink "$H/cosmovisor/current")" "upgrades/$UPGRADE" "c
 eq "$(in_vol "ls -d $H/data-backup-* 2>/dev/null | wc -l" | tr -d ' ')" 1 "data/ backups made for the upgrade (one, not two)"
 eq "$(in_vol "jq -r .name $H/data-backup-*/upgrade-info.json")" "$UPGRADE" "the backup is of the halted state (it holds the upgrade's upgrade-info.json)"
 grep -q 'GET /saicond' "$TMP/http.log" && ok "the binary was downloaded from the plan's URL" || fail "the file server saw no download"
-eq "$(X q entityregistry params --home "$H" -o json | jq -r --arg a "$ATT" '.params.attestors | index($a) != null')" true \
-  "the v0.10.0 handler read the attestor from the same plan info"
-eq "$(X q entityregistry tickets --home "$H" -o json | jq -r '.tickets | length')" 1 "tickets after the upgrade"
+# What the upgrade's own handler did, per upgrade.
+case "$UPGRADE" in
+  v0.10.0)
+    eq "$(X q entityregistry params --home "$H" -o json | jq -r --arg a "$ATT" '.params.attestors | index($a) != null')" true \
+      "the v0.10.0 handler read the attestor from the same plan info"
+    eq "$(X q entityregistry tickets --home "$H" -o json | jq -r '.tickets | length')" 1 "tickets after the upgrade"
+    ;;
+  v0.11.0)
+    eq "$(X q upgrade module_versions participation --home "$H" -o json | jq -r '.module_versions[0].version')" 2 \
+      "x/participation consensus version after the v0.11.0 handler (S10: WARP)"
+    logs_have "$C" "v0.11.0: S10 WARP params in force" \
+      || fail "the v0.11.0 handler's S10 line is missing from the node's log"
+    ok "the v0.11.0 handler logged the S10 WARP params"
+    eq "$(X q rewards voting-power-preview --home "$H" -o json | jq -r '.validators | length')" 1 \
+      "validators in the voting-power preview after the upgrade"
+    ;;
+  *) fail "no post-upgrade check is written for $UPGRADE" ;;
+esac
 
 step "A restart keeps the binary cosmovisor switched to"
 T0=$(date -u +%Y-%m-%dT%H:%M:%SZ)

@@ -3,6 +3,100 @@
 All notable changes to the SAiCoN chain. Versions are git tags; the binary
 reports its version via `git describe`.
 
+## v0.11.0 — 2026-11-27
+
+State-breaking: `x/participation` goes to consensus version 2, and the PoP reward takes a new
+route through `x/distribution` (behaviour only: no store change, `x/rewards` stays at consensus
+version 1). Both ship in the v0.11.0 upgrade, whose handler runs the module migrations.
+Consensus power is unchanged: the CometBFT validator set and its powers are still x/staking's.
+
+### Added
+
+- **WARP** (ADR-0009 §2, S10). Every epoch, each validator that gets a participation snapshot
+  has its WARP stepped from `computed_score × 100`: it falls by `warp_fall` (0.65) of the gap
+  when the score is below it and rises by `warp_rise` (0.10) of the gap when the score is at or
+  above it, clamped to 0–100. A validator's first scored epoch starts from `warp_initial` (80);
+  `warp_threshold` (65) is the eligibility line. A validator that is not ACTIVE gets no snapshot
+  and so no step: its WARP is frozen until it returns. The four values are new `x/participation`
+  params, changed through `MsgUpdateParams`, which refuses values that break
+  `0 < warp_rise < warp_fall ≤ 1` or `0 ≤ warp_threshold ≤ warp_initial ≤ 100`. Each snapshot carries the post-step
+  value in a new field, `warp`; a snapshot from before this release has none and renders `null`.
+  Event `warp_updated` (`validator`, `epoch_id`, `ps`, `warp_before`, `warp_after`,
+  `eligible`). Queries `GET /saicon/chain/participation/v1/warp/{validator_address}` and
+  `GET /saicon/chain/participation/v1/warp` (paginated), CLI `saicond q participation warp` and
+  `warps`. Genesis exports and imports the rows (`warps`); validation refuses a row V-16 would
+  report (non-zero with `last_epoch` 0, or no snapshot at its `last_epoch`) and a snapshot `warp`
+  outside 0–100. InitGenesis now validates the module's params, so a genesis without the WARP
+  params is refused instead of starting with WARP off.
+- **The double-sign sanction zeroes WARP.** `ZeroReputation` sets WARP to 0, keeping the epoch
+  it was last measured in. A validator punished before it was ever scored gets a zero row, so it
+  does not start from 80 later. Closed snapshots, their `warp` included, are never rewritten: the
+  sanction lands before the in-flight epoch is scored, and the jailed validator gets no snapshot
+  for it (V-7). EP is untouched, as before (V-8).
+- **Voting-power preview** (ADR-0008 §1, S10). `GET /saicon/chain/rewards/v1/voting_power_preview`
+  (CLI `saicond q rewards voting-power-preview`) lists every bonded validator with
+  `vp = floor(min(bonded, validator_cap) · WARP/100 · C)`, its eligibility
+  (`ACTIVE ∧ C = 1 ∧ EP > 0 ∧ WARP ≥ warp_threshold` — the first three are the reward gate
+  itself, one function shared with the payout — else a reason), its share of the eligible total and
+  its CometBFT power and share beside it, ordered by `vp` descending, ties by `operator_address`
+  ascending. A validator with no WARP is shown at `warp_initial` with `warp_measured: false`; one
+  punished before its first scored epoch at its stored 0, also `warp_measured: false`. WARP params
+  that do not validate answer `FailedPrecondition`. Read-only; entity caps, seat selection and the
+  lottery are not applied.
+- **Invariant V-16**, checked every epoch and logged, never halting: every WARP row is stored
+  under the validator it names, lies within 0–100, and is backed by a snapshot at its
+  `last_epoch` (or is 0 with `last_epoch` 0).
+
+### Changed
+
+- **PoP rewards reach delegators** (ADR-0011 F3, S10). Each eligible validator's epoch share is
+  no longer sent to its operator account. `x/rewards` moves it to the `x/distribution` module
+  account and books it with `AllocateTokensToValidator`: the validator's commission accrues to
+  its operator, the rest to its delegators in proportion to stake, the operator's
+  self-delegation included. Both are withdrawn with the stock `MsgWithdrawDelegatorReward` and
+  `MsgWithdrawValidatorCommission`, so a wallet's claim now pays the PoP share, and
+  `x/distribution`'s delegation-rewards and commission queries show it before the claim.
+  Who is eligible and how much each share is do not change; the `RewardSnapshot` amount and the
+  `reward_minted` event still carry the whole share routed to the validator. A validator that
+  x/staking does not find, or that has zero tokens, is not allocatable: its share is carried in
+  the remainder and its epoch is recorded unpaid, a denied snapshot and a `reward_denied` event
+  with reason `not allocatable`, which `RewardSummary`, the indexer and the scoreboard read like
+  any other denial. Transaction fees are unchanged: `x/distribution` still pays them
+  stake-weighted every block and they still offset issuance. Until claimed, the PoP share sits
+  in the `x/distribution` module account, so `x/stakeengine` counts it as circulating only once
+  withdrawn, as it already did for fee rewards.
+
+### Fixed
+
+- **An epoch that fails partway leaves nothing behind.** An error in the epoch's reward
+  distribution after the mint used to leave the minted coins in the `x/rewards` module account
+  outside the carry, the observed gas fees consumed and any validators already paid; the next
+  epoch minted its full budget again. The epoch now runs in one cache context, written only
+  when it completes: on an error nothing is minted, paid or recorded, and the carry and the
+  observed fees wait for the next epoch. The error is still logged and does not halt the chain.
+  The bug predates S10. Ships with the v0.11.0 upgrade.
+- **A double-sign no longer rewrites a closed participation snapshot.** x/compliance named the
+  epoch to zero as `floor(height / epoch_length_blocks)`, the last closed epoch at every height
+  that is not a multiple of the epoch length. So the double-sign and coordinated-attack sanctions
+  set `computed_score` and `uptime_fraction` of an already closed snapshot to 0, which V-8
+  forbids; the bug predates S10. It now names the in-flight epoch,
+  `ceil(height / epoch_length_blocks)`: epoch e closes in x/participation's EndBlock at height
+  e·L, so a slash at e·L still belongs to e. The fix ships with the v0.11.0 upgrade. Snapshots
+  already zeroed on a running network stay as they are.
+- A `saicond` built with Go 1.27 printed a `sonic/ast` warning on stderr for every command.
+  Cosmovisor 1.7.3 reads `saicond status` with stderr mixed in, so such a node could not parse its
+  height and never took an upgrade. `github.com/bytedance/sonic` moves from v1.15.0 to v1.15.5
+  (`sonic/loader` v0.5.3), which supports Go 1.27. Release builds stay on Go 1.25.
+
+### Upgrade
+
+- `x/participation` 1 → 2: the migration writes the four WARP params with their defaults and keeps
+  `epoch_length_blocks` and `ep_decay`. No WARP rows are written; every validator starts from
+  `warp_initial` at its first epoch after the upgrade.
+- The `v0.11.0` handler runs the module migrations, then logs what S10 left in the state
+  (`v0.11.0: S10 WARP params in force`: the four values, whether they validate, the WARP row
+  count). It writes nothing of its own and adds no store.
+
 ## v0.10.2 — 2026-11-25
 
 Not state-breaking: the chain code is v0.10.0's, as in v0.10.1, and the DevNet runs this release

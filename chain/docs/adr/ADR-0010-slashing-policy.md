@@ -439,6 +439,12 @@ covers today.
   ([ADR-0009](ADR-0009-participation-score-and-warp.md) is written but proposed, and the engine is a
   Q4 build), the deterrent for chronic unavailability is jail-and-rejoin with no capital cost and no
   reputation memory.
+  *2026-11-24 (S10):* the engine now exists ([ADR-0009](ADR-0009-participation-score-and-warp.md),
+  *Implementation (S10)*), but it does not yet supply this arm for downtime that ends in a jail. A
+  jailed validator is not ACTIVE at the epoch boundary, so it gets no snapshot and its WARP is
+  frozen (R5) at the pre-outage value, and it resumes from there on return; the misses before the
+  jail are reset with the epoch's counters. Only downtime short of the jail lowers WARP. Closing it
+  needs a rule for the epoch of the jail — the override ADR-0009 open question 5 anticipates.
 
 - **Rejected sequencing risk, recorded:** shipping downtime → 0 before WARP exists is acceptable *only*
   because the jail path is real. It would not be acceptable if the config override also relaxed the

@@ -3,8 +3,8 @@ module github.com/saicon-network/saicon/chain
 go 1.25.10
 
 replace (
-	// support for go 1.26 (remove when cosmossdk.io/log is updated)
-	github.com/bytedance/sonic => github.com/bytedance/sonic v1.15.0
+	// support for go 1.27 (remove when cosmossdk.io/log is updated)
+	github.com/bytedance/sonic => github.com/bytedance/sonic v1.15.5
 	// fix upstream GHSA-h395-qcrw-5vmq vulnerability.
 	github.com/gin-gonic/gin => github.com/gin-gonic/gin v1.9.1
 	// replace broken goleveldb
@@ -123,7 +123,7 @@ require (
 	github.com/butuzov/mirror v1.3.0 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect
 	github.com/bytedance/sonic v1.14.2 // indirect
-	github.com/bytedance/sonic/loader v0.5.0 // indirect
+	github.com/bytedance/sonic/loader v0.5.3 // indirect
 	github.com/catenacyber/perfsprint v0.8.2 // indirect
 	github.com/ccojocar/zxcvbn-go v1.0.2 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect

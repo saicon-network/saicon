@@ -32,3 +32,7 @@ var EmpiricalPointsKey = collections.NewPrefix("ep_participation")
 // operator address bytes. Working state for the epoch-window uptime score (M1-B).
 var EpochBlocksSignedKey = collections.NewPrefix("esi_participation")
 var EpochBlocksMissedKey = collections.NewPrefix("emi_participation")
+
+// WarpKey is the prefix for the Warp storage map (ADR-0009 §2), keyed by
+// validator operator address bytes.
+var WarpKey = collections.NewPrefix("warp_participation")

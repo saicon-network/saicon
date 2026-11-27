@@ -5,6 +5,9 @@ Status: **Proposed** (2026-07-28). The parameter values recorded here are the ad
 [DEVELOPMENT.md](../DEVELOPMENT.md) §2.2, lines 95–106; §3.1, lines 234–241); the engine is
 unbuilt (roadmap Q4 2026 → v0.3, §4 line 334) and the *Open questions* below are genuinely
 undecided, so the ADR as a whole is **not** accepted. Acceptance requires closing them.
+*2026-11-24:* the WARP engine of §2 is built (S10) on an uptime-only PS — see
+[Implementation (S10)](#implementation-s10-november-2026). The status stays Proposed:
+BlockQuality, Governance and the outage freeze are still open.
 Related: [ADR-0007](ADR-0007-onchain-offchain-contract-cost-split.md) (where computation runs),
 ADR-0008 (VP + selection — the consumer of WARP), ADR-0010 (slashing, **V-8 revision**),
 ADR-0013 (bounded DAO authority).
@@ -134,9 +137,97 @@ so treat *3 → 10* as directional and **10** as the load-bearing figure.
 6. **Threshold 65 and initial 80** are asserted (above). Keep as baseline, mark
    governance-tunable within bounds, revisit at B2.
 
+## Implementation (S10, November 2026)
+
+The rule of §2 runs on-chain in `x/participation` from S10. Its open questions were ruled for
+this release by a delegated decision (the design notes,
+"decide, we can redo it later"); the rulings are recorded here as built.
+
+- **R1 — PS input.** WARP reads the epoch's existing single-signal score,
+  `PS_warp = computed_score × 100` (`computed_score` is uptime on 0–1). `types.WarpInput` is the
+  only place the two scales meet; the snapshot keeps its 0–1 fields. Per open question 2's own
+  reasoning — a weight with no input is worse than no weight — uptime carries the whole weight
+  until BlockQuality and Governance have producers. *Cost:* WARP history before the multi-signal
+  PS is uptime-only.
+- **R2 — Outage freeze (Q3).** Not built. With an uptime-only PS a network-wide outage cannot
+  lower anyone's PS: uptime is counted per block, and a halted chain produces no blocks. The
+  freeze becomes necessary when a telemetry signal enters PS.
+- **R3 — Missing-telemetry grace.** Not applicable: there is no telemetry signal.
+- **R4 — Where computed (Q4).** On-chain, in `ComputeEpoch`, in the same pass and for the same
+  validators as the snapshot. The snapshot carries the post-update value in a new field `warp`
+  (field 9), so WARP history is readable per epoch without height-pinned reads. A snapshot
+  written before S10 has no `warp`; queries render it as `null`, never as 0.
+- **R5 — Non-ACTIVE (Q5).** No snapshot (V-7) means no update: WARP is frozen while a
+  validator is not ACTIVE and moves again from the frozen value when it returns.
+- **R6 — New validator.** The first scored epoch starts from `warp_initial` and applies that
+  epoch's update, so a dead first epoch takes a newcomer from 80 to 28 at once.
+- **R7 — Punishment.** `ZeroReputation` — the single punishment door of V-8 — sets WARP to 0
+  and keeps the epoch WARP was last measured in. A validator punished before it was ever scored
+  gets a zero row (`last_epoch` 0), so it does not later start from 80. The validator is then
+  non-ACTIVE, so R5 keeps it at 0 until it returns. No closed snapshot is rewritten, its `warp`
+  included. x/compliance names the in-flight epoch, `ceil(h / L)`: epoch e closes in
+  x/participation's EndBlock at h = e·L, so a slash in that block still belongs to e, and from
+  e·L+1 on it belongs to e+1. That snapshot does not exist yet when the sanction lands, and V-7
+  gives the jailed validator none, so in practice the sanction changes WARP and nothing else.
+  `ZeroReputation` still zeroes the named epoch's snapshot, its `warp` with its score, if one
+  exists. *Fixed in review (2026-11-24):* x/compliance used `floor(h / L)` before, which is the
+  last closed epoch at every height that is not a multiple of L, so the sanction rewrote a closed
+  snapshot's score and uptime. That predates S10, which added the `warp` to what it rewrote; the
+  fix ships with the v0.11.0 upgrade.
+- **R8 — Params (§4).** Four new params, tunable through the existing `MsgUpdateParams`:
+  `warp_fall` 0.65, `warp_rise` 0.10, `warp_initial` 80, `warp_threshold` 65. Validation is
+  `0 < warp_rise < warp_fall ≤ 1` — the asymmetry is the decision, so a change that removes it
+  is refused — and `0 ≤ warp_threshold ≤ warp_initial ≤ 100`, so a new validator starts
+  eligible. The result is clamped to [0, 100] after every step; with valid params the rule cannot
+  leave the range, and the clamp makes that a property of the code.
+- **R9 — Upgrade.** WARP lives under a new prefix of the module's existing store, so no store
+  key is added. `ConsensusVersion` goes 1 → 2; `Migrate1to2` writes the four params with their
+  defaults and keeps `epoch_length_blocks` and `ep_decay`. No WARP rows are seeded: every
+  validator meets R6 at its first post-upgrade epoch. The migration rides on the v0.11.0 upgrade
+  handler's `RunMigrations`.
+
+What else ships with it:
+
+- **Store:** `WarpState { validator_address, value, last_epoch }` keyed by operator address
+  bytes. Genesis exports and imports the rows (`warps`). Validation refuses an empty or
+  undecodable address, a duplicate validator, a value outside [0, 100], and any row V-16 would
+  report: one with `last_epoch` 0 must be exactly 0, and one with `last_epoch` > 0 must have a
+  snapshot at that epoch in the genesis `scores`. A snapshot's `warp`, when set, must lie in
+  [0, 100]. `InitGenesis` refuses params that do not validate, WARP's included, so a genesis
+  written before S10 (no WARP params) cannot start with WARP silently off.
+- **Row lifetime:** a row lives as long as the operator address does. Nothing deletes it, not
+  even x/staking removing the validator, so a punished operator keeps its 0, and an operator
+  that creates a validator again under the same address resumes from its old WARP, as EP already
+  does. V-16 walks every row each epoch, so its cost and the genesis size grow with the number of
+  validators ever scored or punished, not with the active set. Accepted for now; pruning on
+  removal would hand a punished operator a fresh `warp_initial`.
+- **Event:** `warp_updated` per stepped validator — `validator`, `epoch_id`, `ps`,
+  `warp_before`, `warp_after`, `eligible` (WARP's own predicate, `warp ≥ threshold`).
+- **Queries:** `GET /saicon/chain/participation/v1/warp/{validator_address}` and
+  `GET /saicon/chain/participation/v1/warp` (paginated), each with the WARP params; CLI
+  `saicond q participation warp|warps`.
+- **Invariant V-16**, checked each epoch and logged, not halted: every row is stored under the
+  validator it names, set and within [0, 100], and backed by a snapshot at its `last_epoch` —
+  or, with `last_epoch` 0, exactly 0. (R7's zero row is why this is not "every validator with
+  WARP has a snapshot".) Until WARP feeds consensus a breach distorts a preview, not a block.
+- **WARP never gets in EP's way.** If the WARP params do not validate (`WarpParams.Validate`),
+  or one validator's stored WARP is unreadable, WARP is left as it was and the error logged; the
+  snapshot and EP are written as before. Params cannot get there through genesis or
+  `MsgUpdateParams`, both of which validate them.
+- **Consumer:** the voting-power preview in `x/rewards` (ADR-0008, *Implementation (S10)*).
+  Nothing in consensus reads WARP yet: the CometBFT set and its powers are still x/staking's.
+
+Still open after S10: open questions 1–3 (BlockQuality, the Governance signal, who confirms an
+outage) and 6 (threshold and initial stay asserted until B2).
+
 ## Consequences
 
 ### The gap between this ADR and the running code
+
+*2026-11-24:* the bullets below describe the tree before S10. Those on WARP's absence, the
+snapshot's missing field and the params without WARP are superseded by
+[Implementation (S10)](#implementation-s10-november-2026); single-signal PS, the scale split
+(now pinned in `types.WarpInput`) and EP decay still hold.
 
 - **PS is single-signal today.** `uptimeWeight = 1.0` (`epoch.go:18`) and
   `score := uptimeWeight.Mul(uptime)` (`epoch.go:118`). Two of the three Register signals have

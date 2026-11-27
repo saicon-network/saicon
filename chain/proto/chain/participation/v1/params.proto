@@ -18,4 +18,33 @@ message Params {
     (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
     (gogoproto.nullable) = false
   ];
+
+  // warp_fall is the share of the gap WARP loses in an epoch whose Participation
+  // Score is below it (ADR-0009 §2, default 0.65). 0 < warp_rise < warp_fall <= 1.
+  string warp_fall = 3 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // warp_rise is the share of the gap WARP recovers in an epoch whose
+  // Participation Score is at or above it (default 0.10).
+  string warp_rise = 4 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // warp_initial is the WARP a validator starts from in the first epoch it is
+  // scored, on 0-100 (default 80). warp_threshold <= warp_initial <= 100.
+  string warp_initial = 5 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
+  // warp_threshold is the WARP at or above which a validator is eligible, on
+  // 0-100 (default 65).
+  string warp_threshold = 6 [
+    (cosmos_proto.scalar) = "cosmos.Dec",
+    (gogoproto.customtype) = "cosmossdk.io/math.LegacyDec",
+    (gogoproto.nullable) = false
+  ];
 }

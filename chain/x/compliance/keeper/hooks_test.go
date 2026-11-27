@@ -140,6 +140,34 @@ func TestHooks_DoubleSignZeroesReputationButNotEP(t *testing.T) {
 			"and the ParticipationKeeper interface does not even expose SetEP")
 }
 
+// The hook names the IN-FLIGHT epoch, ceil(h/L), never the last closed one.
+// Epoch e closes in x/participation's EndBlock at h = e·L, so a slash at that
+// height still belongs to e, and from e·L+1 on it belongs to e+1. floor(h/L),
+// used before S10, named the closed epoch e for every h in (e·L, (e+1)·L).
+func TestHooks_DoubleSignNamesTheInFlightEpoch(t *testing.T) {
+	const epochLen = 100 // the mock's EpochLengthBlocks
+	for _, tc := range []struct {
+		height int64
+		epoch  uint64
+	}{
+		{1, 1},
+		{99, 1},
+		{200, 2}, // e·L: epoch 2 closes at the end of this block
+		{201, 3}, // e·L+1: epoch 2 is closed
+		{299, 3}, // (e+1)·L-1
+		{300, 3},
+	} {
+		f := initFixture(t)
+		addr := hookTestValAddr(t)
+		f.vr.statuses[addr.String()] = vrtypes.Status_STATUS_ACTIVE
+		ctx := sdk.UnwrapSDKContext(f.ctx).WithBlockHeight(tc.height)
+
+		require.NoError(t, f.keeper.Hooks().BeforeValidatorSlashed(ctx, addr, math.LegacyNewDecWithPrec(10, 2)))
+		require.True(t, f.participation.zeroed[addr.String()])
+		require.Equal(t, tc.epoch, f.participation.epoch, "height %d with L=%d", tc.height, epochLen)
+	}
+}
+
 // A punished validator whose epoch cannot be determined must still be jailed:
 // the compliance decision does not depend on the participation layer answering.
 func TestHooks_ReputationFailureDoesNotBlockTheJail(t *testing.T) {

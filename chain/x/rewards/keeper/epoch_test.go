@@ -73,7 +73,8 @@ func TestMaybeRunEpoch_BoundaryDistributes(t *testing.T) {
 	require.True(t, f.bank.minted[0].Equal(expected),
 		"expected %s, got %s", expected, f.bank.minted[0])
 	require.Len(t, f.bank.sends, 1)
-	require.Equal(t, sdk.AccAddress(va.Bytes()), f.bank.sends[0].recipient)
+	require.Len(t, f.distr.allocs, 1)
+	require.Equal(t, va.String(), f.distr.allocs[0].val.GetOperator())
 
 	snap, found, err := f.keeper.GetRewardSnapshot(f.ctx, epochID, va)
 	require.NoError(t, err)

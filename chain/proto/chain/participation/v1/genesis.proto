@@ -63,4 +63,11 @@ message GenesisState {
     (gogoproto.nullable) = false,
     (amino.dont_omitempty) = true
   ];
+
+  // warps is every stored WARP (ADR-0009 §2). Dropping them on a round trip
+  // would restart every validator at warp_initial.
+  repeated WarpState warps = 6 [
+    (gogoproto.nullable) = false,
+    (amino.dont_omitempty) = true
+  ];
 }

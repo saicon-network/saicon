@@ -6,6 +6,8 @@ package epoch
 import (
 	"context"
 	"fmt"
+	"log"
+	"math"
 
 	"github.com/saicon-network/saicon/indexer/internal/chain"
 	"github.com/saicon-network/saicon/indexer/internal/store"
@@ -26,6 +28,7 @@ type Reader struct {
 	src      Source
 	epochLen uint64
 	consOf   func(chain.Validator) (string, error)
+	logf     func(string, ...any)
 }
 
 func New(s *store.Store, src Source, epochLen uint64) *Reader {
@@ -34,7 +37,7 @@ func New(s *store.Store, src Source, epochLen uint64) *Reader {
 	// the address is the first 20 bytes of the key's SHA-256, upper-case hex —
 	// verified against the localnet header at height 50. Get this wrong and the
 	// proposal count quietly reads zero for everyone.
-	return &Reader{s: s, src: src, epochLen: epochLen, consOf: func(v chain.Validator) (string, error) {
+	return &Reader{s: s, src: src, epochLen: epochLen, logf: log.Printf, consOf: func(v chain.Validator) (string, error) {
 		// A key that does not decode is a malformed staking response, not chain
 		// silence: it arrived in the same object as tokens, moniker and status.
 		// Returning an error rather than an empty address, because an empty one
@@ -46,6 +49,9 @@ func New(s *store.Store, src Source, epochLen uint64) *Reader {
 // SetConsResolver overrides how a validator's consensus address is derived, so a
 // test can supply the address directly instead of a key.
 func (r *Reader) SetConsResolver(f func(chain.Validator) (string, error)) { r.consOf = f }
+
+// SetLogf replaces where the reader logs, so a test can read what it said.
+func (r *Reader) SetLogf(f func(string, ...any)) { r.logf = f }
 
 // ReadEpoch writes one snapshot row per validator for the epoch just closed,
 // and refreshes the current-state row while it is there.
@@ -153,6 +159,13 @@ func (r *Reader) ReadEpoch(ctx context.Context, chainID string, ep uint64) error
 			signed, missed := snap.BlocksSigned, snap.BlocksMissed
 			out.ComputedScore, out.ComputedAt = &score, &at
 			out.BlocksSigned, out.BlocksMissed = &signed, &missed
+			// Verbatim, never rounded, and nil stays nil: a snapshot from before
+			// the WARP engine has no WARP, which is not a WARP of 0.
+			out.Warp = snap.Warp
+			if snap.InvalidWarp != "" {
+				r.logf("epoch %d: validator %s: snapshot warp %s is not a decimal from 0 to 100, stored as null",
+					ep, v.Operator, snap.InvalidWarp)
+			}
 		}
 		if rew != nil {
 			amt, elig, reason := rew.Amount, rew.Eligible, rew.Reason
@@ -174,6 +187,14 @@ func (r *Reader) ReadEpoch(ctx context.Context, chainID string, ep uint64) error
 			out.Proposals = &n
 		}
 		if err := r.s.UpsertSnapshot(ctx, chainID, out); err != nil {
+			return err
+		}
+	}
+	// The preview is read by its own pass (PreviewPass), which owns its retries
+	// and its time: here the epoch only joins that pass's list, before it is
+	// marked read, so a restart in between cannot leave it off the list.
+	if r.epochLen > 0 && ep > 0 && ep <= math.MaxInt64/r.epochLen {
+		if err := r.s.MarkPreviewDue(ctx, chainID, ep); err != nil {
 			return err
 		}
 	}

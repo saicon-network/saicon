@@ -78,7 +78,13 @@ func (AppModule) RegisterInterfaces(registrar codectypes.InterfaceRegistry) {
 func (am AppModule) RegisterServices(registrar grpc.ServiceRegistrar) error {
 	types.RegisterMsgServer(registrar, keeper.NewMsgServerImpl(am.keeper))
 	types.RegisterQueryServer(registrar, keeper.NewQueryServerImpl(am.keeper))
-
+	// Store migrations ride on the configurator module.Manager passes as the
+	// registrar (cosmossdk.io/core v0.11 has no separate migrations interface).
+	if cfg, ok := registrar.(module.Configurator); ok {
+		if err := cfg.RegisterMigration(types.ModuleName, 1, keeper.NewMigrator(am.keeper).Migrate1to2); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -126,12 +132,12 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, _ codec.JSONCodec) json.RawMe
 	return bz
 }
 
-// ConsensusVersion is a sequence number for state-breaking changes. It stays at
-// 1 through v0.1 development: the chain is pre-launch (genesis is reset on every
-// iteration, no live state to migrate), so store additions (e.g. M1-B epoch
-// counters) do not yet require a migration. ConsensusVersion bumps + migration
-// handlers are introduced with upgrade readiness (roadmap M3-D).
-func (AppModule) ConsensusVersion() uint64 { return 1 }
+// ConsensusVersion is a sequence number for state-breaking changes.
+//
+//   - 1: through v0.10 (the participation store before WARP).
+//   - 2: S10, the WARP engine. Migrate1to2 gives the four WARP parameters their
+//     defaults; it writes no WARP rows (ruling R9).
+func (AppModule) ConsensusVersion() uint64 { return 2 }
 
 // BeginBlock tallies the previous block's precommit votes into per-validator
 // epoch counters by forwarding them to keeper.RecordEpochVotes. It reads the
@@ -200,6 +206,12 @@ func (am AppModule) EndBlock(ctx context.Context) error {
 	// A breach is a correctness violation (not a transient error) and halts.
 	if msg, broken := am.keeper.PSActiveOnlyInvariant(ctx, epochID); broken {
 		panic(msg)
+	}
+
+	// V-16: every WARP row is well-formed. Checked, not halted: WARP feeds no
+	// consensus value until S11, so a breach is logged for the operator.
+	if msg, broken := am.keeper.WarpInvariant(ctx); broken {
+		sdkCtx.Logger().Error(msg, "height", h, "epoch_id", epochID)
 	}
 
 	sdkCtx.Logger().Info("participation: epoch computed", "height", h, "epoch_id", epochID)

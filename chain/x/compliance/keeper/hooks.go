@@ -160,8 +160,19 @@ func (h Hooks) AfterUnbondingInitiated(_ context.Context, _ uint64) error {
 }
 
 // zeroReputationBestEffort applies the reputation half of the double-sign
-// sanction (ADR-0010 §4): the in-flight epoch's participation score goes to
-// zero, and — once the WARP engine exists — so does WARP.
+// sanction (ADR-0010 §4): WARP goes to zero, and so does the in-flight epoch's
+// participation snapshot if it has one.
+//
+// The in-flight epoch at height h is ceil(h/L). Epoch e closes in
+// x/participation's EndBlock at h = e·L, so a slash in that block's BeginBlock
+// or in one of its transactions still belongs to epoch e; from h = e·L+1 on, e
+// is closed and e+1 is in flight. floor(h/L), used here before S10, named the
+// last CLOSED epoch for every h that is not a multiple of L, and so rewrote a
+// closed snapshot, which V-8 forbids. In practice the in-flight snapshot never
+// exists when this runs: x/participation writes snapshots in its EndBlock of the
+// closing block, after that block's BeginBlock slashes, its transactions and
+// x/gov's EndBlock, and V-7 then skips the jailed validator. So the snapshot
+// half is a guard, and the effect that lands is WARP = 0.
 //
 // BEST EFFORT, deliberately. The load-bearing sanctions are the stake burn
 // (x/slashing), C=0 and the jail, and all three have already landed by the time
@@ -180,7 +191,12 @@ func (k Keeper) zeroReputationBestEffort(ctx context.Context, valAddr sdk.ValAdd
 		return
 	}
 
-	epoch := uint64(sdk.UnwrapSDKContext(ctx).BlockHeight()) / epochLen
+	// ceil(h/L), written so that no large L can overflow it.
+	h := uint64(sdk.UnwrapSDKContext(ctx).BlockHeight())
+	epoch := h / epochLen
+	if h%epochLen != 0 {
+		epoch++
+	}
 	if err := k.participationKeeper.ZeroReputation(ctx, valAddr, epoch); err != nil {
 		logger.Error("compliance: zeroing reputation failed; validator is still jailed and flagged",
 			"validator", valAddr.String(), "epoch", epoch, "err", err)

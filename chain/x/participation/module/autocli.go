@@ -29,6 +29,17 @@ func (am AppModule) AutoCLIOptions() *autocliv1.ModuleOptions {
 					Short:          "Query the Participation Score snapshot for a validator at an epoch",
 					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "validator_address"}, {ProtoField: "epoch_id"}},
 				},
+				{
+					RpcMethod:      "Warp",
+					Use:            "warp [validator-address]",
+					Short:          "Query a validator's WARP and the parameters it is judged by",
+					PositionalArgs: []*autocliv1.PositionalArgDescriptor{{ProtoField: "validator_address"}},
+				},
+				{
+					RpcMethod: "Warps",
+					Use:       "warps",
+					Short:     "List every stored WARP",
+				},
 			},
 		},
 		Tx: &autocliv1.ServiceCommandDescriptor{

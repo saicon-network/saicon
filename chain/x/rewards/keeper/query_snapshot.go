@@ -87,7 +87,7 @@ func (q queryServer) RewardSummary(ctx context.Context, req *types.QueryRewardSu
 			resp.EpochsPaid++
 		}
 		// Three cases, and they must stay distinguishable. A denial records an
-		// empty Amount AND Eligible false (emission.go:299-303) — that pair is
+		// empty Amount AND Eligible false (emission.go, denied) — that pair is
 		// the module's sentinel, not corruption, and it is skipped in silence.
 		// Both halves are checked: an eligible snapshot with an empty Amount is
 		// not a denial, it is a paid epoch whose money went missing, and letting
